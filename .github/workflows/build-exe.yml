@@ -4,34 +4,41 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
+  workflow_dispatch: # ম্যানুয়ালি রান করার অপশন
 
 jobs:
   build-exe:
     runs-on: windows-latest
+    permissions: # রিলিজ তৈরির জন্য রাইট পারমিশন নিশ্চিত করা
+      contents: write
 
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # আপডেট করা ভার্সন
 
       - name: Setup Python 3.10
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # আপডেট করা ভার্সন
         with:
           python-version: '3.10'
 
       - name: Install Dependencies
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
       - name: Build EXE with PyInstaller
         run: |
-          pip install pyinstaller
           pyinstaller --noconsole --onefile --name ZKTimeSync app.py
 
-      - name: Upload EXE to GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Create Release and Upload EXE
+        uses: softprops/action-gh-release@v2 # v2 ব্যবহার করা ভালো
         with:
           files: dist/ZKTimeSync.exe
+          # ম্যানুয়ালি রান করলে যাতে এরর না দেয়, তাই একটি ডিফল্ট ট্যাগ সেট করা
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
