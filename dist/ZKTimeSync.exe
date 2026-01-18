@@ -1,0 +1,5 @@
+pyinstaller --onefile --noconsole \
+    --name ZKTimeSync \
+    --hidden-import=zk \
+    --hidden-import=requests \
+    app.py
