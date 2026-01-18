@@ -2,7 +2,7 @@ name: Build EXE for ZKTime Sync
 
 on:
   push:
-    branches:
+    tags:
       - 'v*'
   workflow_dispatch:
 
