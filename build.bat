@@ -1,78 +1,17 @@
-name: Build ZKTime Sync Installer
+@echo off
+REM Clean folders
+if exist dist rmdir /s /q dist
+if exist build rmdir /s /q build
+if exist Output rmdir /s /q Output
 
-on:
-  push:
-    tags:
-      - "v*"
-  workflow_dispatch:
+REM Build EXE
+pyinstaller --noconsole --onefile --name ZKTimeSync ^
+    --hidden-import=zk ^
+    --hidden-import=requests ^
+    app.py
 
-jobs:
-  build:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+REM Build Installer
+iscc ZKTimeSync.iss
 
-    steps:
-      # ----------------------------
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      # ----------------------------
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: "pip"
-
-      # ----------------------------
-      - name: Install dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller pyzk requests
-          if (Test-Path "requirements.txt") {
-            pip install -r requirements.txt
-          }
-
-      # ----------------------------
-      - name: Build EXE with PyInstaller
-        shell: pwsh
-        run: |
-          if (Test-Path "dist") { Remove-Item -Recurse -Force dist }
-          pyinstaller --onefile --noconsole --name ZKTimeSync `
-            --hidden-import=zk `
-            --hidden-import=requests `
-            app.py
-
-      # ----------------------------
-      - name: Install Inno Setup
-        shell: pwsh
-        run: |
-          choco install innosetup -y
-
-      # ----------------------------
-      - name: Build Installer with Inno Setup
-        shell: pwsh
-        run: |
-          if (-Not (Test-Path "ZKTimeSync.iss")) {
-            Write-Host "ERROR: ZKTimeSync.iss not found!"
-            exit 1
-          }
-          iscc ZKTimeSync.iss
-
-      # ----------------------------
-      - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ZKTimeSyncInstaller
-          path: Output/ZKTimeSyncInstaller.exe
-
-      # ----------------------------
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: Output/ZKTimeSyncInstaller.exe
-          name: ZKTime Sync ${{ github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+echo Done! Installer at Output\ZKTimeSyncInstaller.exe
+pause
