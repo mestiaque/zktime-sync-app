@@ -13,12 +13,12 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
-FIXED_API_URL = "https://payrool.nitbd.com/api/iclock/cdata"
+DEFAULT_API_URL = "https://payrool.nitbd.com/api/iclock/cdata"
 
 # ===== CONFIG HANDLING =====
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        return {"devices": []}
+        return {"api_url": DEFAULT_API_URL, "devices": []}
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -31,7 +31,7 @@ class ZKApp:
     def __init__(self, root):
         self.root = root
         self.root.title("ZKTeco Time Sync")
-        self.root.geometry("700x500")
+        self.root.geometry("650x480")
         self.root.resizable(False, False)
 
         self.config = load_config()
@@ -42,26 +42,35 @@ class ZKApp:
         self.device_frame.pack()
         self.refresh_devices()
 
-        tk.Button(root, text="Add Device", width=20,
+        tk.Button(root, text="Add Device", width=15,
                   command=self.add_device).pack(pady=5)
 
         self.sync_btn = tk.Button(
             root, text="SYNC NOW", bg="green", fg="white",
-            font=("Arial", 11, "bold"), width=25,
+            font=("Arial", 11, "bold"), width=20,
             command=self.run_sync
         )
         self.sync_btn.pack(pady=10)
 
-        tk.Label(root, text="Log Output", font=("Arial", 10, "bold")).pack()
-        self.log_box = scrolledtext.ScrolledText(root, width=80, height=15)
+        tk.Label(root, text="Log Output",
+                 font=("Arial", 10, "bold")).pack()
+
+        self.log_box = scrolledtext.ScrolledText(
+            root, width=75, height=14
+        )
         self.log_box.pack(padx=10, pady=5)
 
         self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
 
     # ===== SAFE LOG =====
     def log(self, text):
-        self.root.after(0, lambda: (self.log_box.insert(tk.END, text + "\n"),
-                                    self.log_box.see(tk.END)))
+        self.root.after(
+            0,
+            lambda: (
+                self.log_box.insert(tk.END, text + "\n"),
+                self.log_box.see(tk.END)
+            )
+        )
 
     # ===== DEVICE MANAGEMENT =====
     def refresh_devices(self):
@@ -69,34 +78,32 @@ class ZKApp:
             w.destroy()
 
         tk.Label(self.device_frame, text="IP Address", width=20).grid(row=0, column=0)
-        tk.Label(self.device_frame, text="Port", width=10).grid(row=0, column=1)
-        tk.Label(self.device_frame, text="Password", width=10).grid(row=0, column=2)
+        tk.Label(self.device_frame, text="Password", width=15).grid(row=0, column=1)
 
         for i, dev in enumerate(self.config["devices"]):
             tk.Label(self.device_frame, text=dev["ip"]).grid(row=i+1, column=0)
-            tk.Label(self.device_frame, text=str(dev.get("port", 4370))).grid(row=i+1, column=1)
-            tk.Label(self.device_frame, text=str(dev.get("password", 0))).grid(row=i+1, column=2)
+            tk.Label(self.device_frame, text=dev["password"]).grid(row=i+1, column=1)
             tk.Button(
                 self.device_frame, text="Remove", fg="red",
                 command=lambda x=i: self.remove_device(x)
-            ).grid(row=i+1, column=3)
+            ).grid(row=i+1, column=2)
 
     def add_device(self):
         ip = simpledialog.askstring("Add Device", "Enter Device IP:")
         if not ip:
             return
 
-        port = simpledialog.askstring("Add Device", "Enter Port (default 4370):")
-        password = simpledialog.askstring("Add Device", "Enter Device Password (0 if none):")
+        pwd = simpledialog.askstring(
+            "Device Password", "Enter device password (0 if none):"
+        )
 
         try:
-            port = int(port or 4370)
-            password = int(password or 0)
+            pwd = int(pwd or 0)
         except ValueError:
-            messagebox.showerror("Error", "Port and Password must be numbers")
+            messagebox.showerror("Error", "Password must be a number")
             return
 
-        self.config["devices"].append({"ip": ip.strip(), "port": port, "password": password})
+        self.config["devices"].append({"ip": ip.strip(), "password": pwd})
         save_config(self.config)
         self.refresh_devices()
 
@@ -111,31 +118,19 @@ class ZKApp:
             messagebox.showerror("Error", "No devices added!")
             return
 
-        try:
-            self.log("🔄 Starting Sync...")
-            self.sync_btn.config(state="disabled")
-            self.root.protocol("WM_DELETE_WINDOW", self.disable_close)
+        self.log("🔄 Starting Sync...")
+        self.sync_btn.config(state="disabled")
+        self.root.protocol("WM_DELETE_WINDOW", self.disable_close)
 
-            threading.Thread(target=self.sync_thread, daemon=True).start()
-        except Exception as e:
-            messagebox.showerror("Critical Error", f"Unexpected error: {e}")
-            self.root.destroy()
-
-        # threading.Thread(target=self.sync_thread, daemon=True).start()
+        threading.Thread(target=self.sync_thread, daemon=True).start()
 
     def sync_thread(self):
         try:
             fetch_logs_and_sync(
-                FIXED_API_URL,
+                self.config["api_url"],
                 self.config["devices"],
-                self.log  # pass log function
+                self.log  # pass function, not widget
             )
-        except Exception as e:
-            # Critical failure during sync
-            self.root.after(0, lambda: (
-                messagebox.showerror("Sync Failed", f"Critical error:\n{e}"),
-                self.root.destroy()  # <--- quit on error
-            ))
         finally:
             self.root.after(0, self.finish_sync)
 

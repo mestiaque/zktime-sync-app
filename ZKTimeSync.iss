@@ -10,6 +10,7 @@ SolidCompression=yes
 
 [Files]
 Source: "dist\ZKTimeSync.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "config.json"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\ZKTime Sync"; Filename: "{app}\ZKTimeSync.exe"
