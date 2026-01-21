@@ -82,7 +82,7 @@ class ZKApp:
         self.sync_btn = tk.Button(action_frame, text="SYNC NOW", bg="green", fg="white", width=25,
                                   font=("Arial", 11, "bold"), command=self.run_sync)
         self.sync_btn.grid(row=0, column=0, padx=5)
-        tk.Button(action_frame, text="Developer Info", width=20, command=self.show_dev_info).grid(row=0, column=1, padx=5)
+        tk.Button(action_frame, text="i", width=20, command=self.show_dev_info).grid(row=0, column=1, padx=5)
 
         # ===== LOG BOX =====
         tk.Label(root, text="Log Output", font=("Arial", 10, "bold")).pack()

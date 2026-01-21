@@ -1,6 +1,6 @@
 from zk import ZK
 import requests
-from datetime import datetime
+from datetime import datetime, date
 import time
 from sync_dup import SyncDUP
 
@@ -12,6 +12,8 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
         log_fn(text)
 
     log("🔄 Starting sync with devices...")
+
+    today = date.today()  # আজকের তারিখ
 
     for dev in devices:
         ip = dev.get("ip")
@@ -28,9 +30,13 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
             sn = conn.get_serialnumber()
             log(f"📟 Device SN: {sn}")
 
+            # আগের আজকের সিঙ্ক সময়
             last_sync = dup.get_last_sync(sn)
+            if last_sync and last_sync.date() != today:
+                last_sync = None  # আগের দিনের last_sync আজকের জন্য বাদ
+
             if last_sync:
-                log(f"🧠 Last sync time: {last_sync}")
+                log(f"🧠 Last sync time today: {last_sync}")
 
             logs = conn.get_attendance()
             log(f"✔ {len(logs)} log(s) fetched from {ip}")
@@ -39,7 +45,11 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
             sent_count = 0
 
             for l in logs:
-                # ⛔ Skip old / already synced logs
+                # ⛔ Skip logs not from today
+                if l.timestamp.date() != today:
+                    continue
+
+                # ⛔ Skip logs already synced today
                 if last_sync and l.timestamp <= last_sync:
                     continue
 
