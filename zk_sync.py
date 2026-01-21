@@ -1,33 +1,31 @@
 from zk import ZK
 import requests
-import json
 from datetime import datetime
 
-def log(text, box):
-    box.insert("end", text + "\n")
-    box.see("end")
+def fetch_logs_and_sync(api_url, devices, log_fn):
+    def log(text):
+        log_fn(text)
 
-def fetch_logs_and_sync(api_url, devices, log_box):
-    log("Connecting to devices...", log_box)
+    log("Connecting to devices...")
 
     for dev in devices:
         ip = dev["ip"]
         pwd = dev["password"]
 
         try:
-            log(f"🔌 Connecting: {ip}", log_box)
+            log(f"🔌 Connecting: {ip}")
             zk = ZK(ip, port=4370, timeout=5, password=pwd)
             conn = zk.connect()
             conn.disable_device()
         except Exception as e:
-            log(f"❌ Failed: {ip} — {e}", log_box)
+            log(f"❌ Failed: {ip} — {e}")
             continue
 
         try:
             logs = conn.get_attendance()
-            log(f"✔ Logs: {len(logs)}", log_box)
+            log(f"✔ Logs: {len(logs)}")
         except:
-            log(f"❌ Could not read logs from {ip}", log_box)
+            log(f"❌ Could not read logs from {ip}")
             continue
 
         for l in logs:
@@ -41,14 +39,13 @@ def fetch_logs_and_sync(api_url, devices, log_box):
             try:
                 r = requests.post(api_url, json=payload)
                 if r.status_code == 200:
-                    log(f"Synced → User {l.user_id}", log_box)
+                    log(f"Synced → User {l.user_id}")
                 else:
-                    log(f"API Error {r.status_code}", log_box)
+                    log(f"API Error {r.status_code}")
             except Exception as e:
-                log(f"API Failed: {e}", log_box)
+                log(f"API Failed: {e}")
 
         conn.enable_device()
         conn.disconnect()
 
-    log("🎉 Sync Complete!", log_box)
-
+    log("🎉 Sync Complete!")
