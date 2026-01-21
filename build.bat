@@ -1,51 +1,78 @@
-@echo off
-REM ================================
-REM ZKTimeSync Build & Installer
-REM ================================
+name: Build ZKTime Sync Installer
 
-REM --- Clean previous builds ---
-if exist dist rmdir /s /q dist
-if exist build rmdir /s /q build
-if exist Output rmdir /s /q Output
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
 
-echo Cleaning done.
-echo.
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
 
-REM --- Build EXE with PyInstaller ---
-echo Building EXE...
-pyinstaller --noconsole --onefile --name ZKTimeSync ^
-    --hidden-import=zk ^
-    --hidden-import=requests ^
-    app.py
+    steps:
+      # ----------------------------
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-if errorlevel 1 (
-    echo PyInstaller failed!
-    pause
-    exit /b 1
-)
+      # ----------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
 
-echo EXE built successfully!
-echo.
+      # ----------------------------
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pyzk requests
+          if (Test-Path "requirements.txt") {
+            pip install -r requirements.txt
+          }
 
-REM --- Build Installer with Inno Setup ---
-echo Building Installer...
-REM Ensure Inno Setup CLI (iscc) is in PATH
-if not exist ZKTimeSync.iss (
-    echo ERROR: ZKTimeSync.iss not found!
-    pause
-    exit /b 1
-)
+      # ----------------------------
+      - name: Build EXE with PyInstaller
+        shell: pwsh
+        run: |
+          if (Test-Path "dist") { Remove-Item -Recurse -Force dist }
+          pyinstaller --onefile --noconsole --name ZKTimeSync `
+            --hidden-import=zk `
+            --hidden-import=requests `
+            app.py
 
-iscc ZKTimeSync.iss
+      # ----------------------------
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y
 
-if errorlevel 1 (
-    echo Inno Setup failed!
-    pause
-    exit /b 1
-)
+      # ----------------------------
+      - name: Build Installer with Inno Setup
+        shell: pwsh
+        run: |
+          if (-Not (Test-Path "ZKTimeSync.iss")) {
+            Write-Host "ERROR: ZKTimeSync.iss not found!"
+            exit 1
+          }
+          iscc ZKTimeSync.iss
 
-echo Installer built successfully!
-echo.
+      # ----------------------------
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZKTimeSyncInstaller
+          path: Output/ZKTimeSyncInstaller.exe
 
-echo All done! Installer is located at Output\ZKTimeSyncInstaller.exe
-pause
+      # ----------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: Output/ZKTimeSyncInstaller.exe
+          name: ZKTime Sync ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
