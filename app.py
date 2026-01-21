@@ -6,8 +6,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, scrolledtext
 from zk_sync import fetch_logs_and_sync
 
-
-# ===== PATH HANDLING (EXE SAFE) =====
+# ===== PATHS SAFE =====
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
@@ -133,7 +132,7 @@ class ZKApp:
             fetch_logs_and_sync(
                 self.config["api_url"],
                 self.config["devices"],
-                self.log
+                self.log  # pass function, not widget
             )
         finally:
             self.root.after(0, self.finish_sync)
