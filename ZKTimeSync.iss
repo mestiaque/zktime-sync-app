@@ -3,6 +3,7 @@ AppName=ZKTime Sync
 AppVersion=1.0
 DefaultDirName={pf}\ZKTimeSync
 DefaultGroupName=ZKTime Sync
+OutputDir=Output
 OutputBaseFilename=ZKTimeSyncInstaller
 Compression=lzma
 SolidCompression=yes
