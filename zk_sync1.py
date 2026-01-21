@@ -2,13 +2,19 @@ from zk import ZK
 import requests
 from datetime import datetime
 import time
-from sync_dup import SyncDUP
-
-dup = SyncDUP()
 
 def fetch_logs_and_sync(api_url, devices, log_fn):
+    """
+    Fetch attendance logs from ZKTeco devices and sync to API.
+
+    Args:
+        api_url (str): API endpoint URL
+        devices (list): List of dicts: {"ip": str, "port": int, "password": int}
+        log_fn (callable): Function to log messages (thread-safe for UI)
+    """
 
     def log(text):
+        # Wrap log function
         log_fn(text)
 
     log("🔄 Starting sync with devices...")
@@ -28,21 +34,10 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
             sn = conn.get_serialnumber()
             log(f"📟 Device SN: {sn}")
 
-            last_sync = dup.get_last_sync(sn)
-            if last_sync:
-                log(f"🧠 Last sync time: {last_sync}")
-
             logs = conn.get_attendance()
             log(f"✔ {len(logs)} log(s) fetched from {ip}")
 
-            max_synced_time = last_sync
-            sent_count = 0
-
             for l in logs:
-                # ⛔ Skip old / already synced logs
-                if last_sync and l.timestamp <= last_sync:
-                    continue
-
                 payload = {
                     "user_id": l.user_id,
                     "timestamp": l.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
@@ -53,33 +48,12 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
 
                 try:
                     r = requests.post(api_url, json=payload, timeout=10)
-
                     if r.status_code == 200:
                         log(f"✅ Synced → User {l.user_id}")
-                        sent_count += 1
-
-                        if not max_synced_time or l.timestamp > max_synced_time:
-                            max_synced_time = l.timestamp
-
-                    elif r.status_code == 429:
-                        log("⏳ Rate limit hit, waiting 2s...")
-                        time.sleep(2)
-                        continue
-
                     else:
-                        log(f"❌ API Error {r.status_code}: {r.text}")
-
+                        log(f"❌ API Error {r.status_code} for User {l.user_id}")
                 except Exception as e:
-                    log(f"❌ API Failed: {e}")
-
-                time.sleep(0.4)  # 🔹 delay to avoid 429
-
-            # 💾 Save last sync ONLY if something sent
-            if sent_count > 0 and max_synced_time:
-                dup.save_last_sync(sn, max_synced_time)
-                log(f"💾 Last sync updated → {max_synced_time}")
-
-            log(f"📊 Sent {sent_count} new log(s) from {ip}")
+                    log(f"❌ API Failed for User {l.user_id}: {e}")
 
         except Exception as e:
             log(f"❌ Connection/Fetch failed for {ip}: {e}")
