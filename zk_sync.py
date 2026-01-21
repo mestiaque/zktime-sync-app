@@ -32,8 +32,8 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
 
             # আগের আজকের সিঙ্ক সময়
             last_sync = dup.get_last_sync(sn)
-            if last_sync and last_sync.date() != today:
-                last_sync = None  # আগের দিনের last_sync আজকের জন্য বাদ
+            if not isinstance(last_sync, datetime) or (last_sync and last_sync.date() != today):
+                last_sync = None  # আগের দিনের বা invalid last_sync ignore
 
             if last_sync:
                 log(f"🧠 Last sync time today: {last_sync}")
@@ -100,7 +100,7 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
                     conn.enable_device()
                     conn.disconnect()
                     log(f"🔌 Disconnected {ip}")
-                except:
-                    pass
+                except Exception as e:
+                    log(f"⚠️ Failed to enable/disconnect: {e}")
 
     log("🎉 Sync complete!")
