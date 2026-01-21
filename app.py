@@ -15,7 +15,6 @@ else:
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 DEFAULT_API_URL = "https://your-api-url.com/sync"
 
-
 # ===== CONFIG HANDLING =====
 def load_config():
     if not os.path.exists(CONFIG_FILE):
@@ -23,11 +22,9 @@ def load_config():
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def save_config(cfg):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=4)
-
 
 # ===== UI APP =====
 class ZKApp:
