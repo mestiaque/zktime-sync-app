@@ -114,7 +114,8 @@ class ZKApp:
         # Start auto sync if configured
         if current > 0:
             self.schedule_auto_sync(current)
-
+        self.log("Data file: " + CONFIG_FILE)
+        
     # ===== HELPER =====
     def log(self, text):
         self.root.after(0, lambda: (self.log_box.insert(tk.END, text + "\n"),
