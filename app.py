@@ -82,7 +82,8 @@ class ZKApp:
         self.sync_btn = tk.Button(action_frame, text="SYNC NOW", bg="green", fg="white", width=25,
                                   font=("Arial", 11, "bold"), command=self.run_sync)
         self.sync_btn.grid(row=0, column=0, padx=5)
-        tk.Button(action_frame, text="i", width=20, command=self.show_dev_info).grid(row=0, column=1, padx=5)
+        
+        tk.Button( action_frame, text="ℹ", width=3, font=("Arial", 11, "bold"), command=self.show_dev_info ).grid(row=0, column=1, padx=5)
 
         # ===== LOG BOX =====
         tk.Label(root, text="Log Output", font=("Arial", 10, "bold")).pack()
@@ -117,7 +118,7 @@ class ZKApp:
         self.tree.delete(*self.tree.get_children())
         for i, dev in enumerate(self.config["devices"]):
             sn = dev.get("sn", "Unknown")
-            self.tree.insert("", "end", iid=i, values=(dev["ip"], dev.get("port", 4370), sn))
+            self.tree.insert("", "end", values=(dev["ip"], dev.get("port", 4370), sn))
 
     def add_device(self):
         ip = simpledialog.askstring("Add Device", "Enter Device IP:")

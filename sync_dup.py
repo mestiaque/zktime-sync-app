@@ -1,26 +1,29 @@
 # sync_dup.py
 import json
-from datetime import datetime, date
+from datetime import datetime
 import os
 
 class SyncDUP:
     def __init__(self, filename="last_sync.json"):
-        self.filename = filename
-        # ফাইল থাকলে load করো, না থাকলে empty dict
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, "r") as f:
-                    self.data = json.load(f)
-            except:
-                self.data = {}
-        else:
+
+        # 🔒 Always store file beside this script
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.filename = os.path.join(base_dir, filename)
+
+        # 📂 If file doesn't exist, create it safely
+        if not os.path.exists(self.filename):
+            with open(self.filename, "w") as f:
+                json.dump({}, f)
+
+        # 📥 Load existing data
+        try:
+            with open(self.filename, "r") as f:
+                self.data = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Failed to load sync file: {e}")
             self.data = {}
 
     def get_last_sync(self, sn):
-        """
-        sn = device serial number
-        return datetime object বা None
-        """
         ts = self.data.get(str(sn))
         if ts:
             try:
@@ -30,12 +33,9 @@ class SyncDUP:
         return None
 
     def save_last_sync(self, sn, dt: datetime):
-        """
-        sn = device serial number
-        dt = datetime object
-        """
         self.data[str(sn)] = dt.isoformat()
-        # ফাইল update করো
+
         with open(self.filename, "w") as f:
             json.dump(self.data, f, indent=4)
+
         print(f"💾 Last sync saved for {sn}: {dt}")
