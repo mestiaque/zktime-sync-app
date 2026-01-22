@@ -332,3 +332,6 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = ZKApp(root)
     root.mainloop()
+
+
+    #app .zkdata permission passe na
