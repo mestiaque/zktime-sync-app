@@ -115,7 +115,7 @@ class ZKApp:
         if current > 0:
             self.schedule_auto_sync(current)
         self.log("Data file: " + CONFIG_FILE)
-        
+
     # ===== HELPER =====
     def log(self, text):
         self.root.after(0, lambda: (self.log_box.insert(tk.END, text + "\n"),
@@ -159,17 +159,40 @@ class ZKApp:
         except ValueError:
             messagebox.showerror("Error", "Port and Password must be numbers")
             return
-        
-        # নতুন ডিভাইস যোগ করা
-        self.config["devices"].append({
-            "ip": ip.strip(),
-            "port": port,
-            "password": password,
-            "sn": None  # প্রথমে None, পরে refresh বা sync করলে SN আসবে
-        })
-        
-        save_config(self.config)
-        self.refresh_devices()  # Treeview আপডেট হবে
+
+        # নতুন ডিভাইস ডাইরেক্টলি ফাইলে সংরক্ষণ
+        try:
+            # পুরনো config লোড করি
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            else:
+                cfg = {"devices": [], "auto_sync_interval": 0}
+
+            # নতুন ডিভাইস যোগ
+            cfg["devices"].append({
+                "ip": ip.strip(),
+                "port": port,
+                "password": password,
+                "sn": None
+            })
+
+            # ফাইলে সংরক্ষণ
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=4)
+
+            # Windows হলে হাইড করে দাও
+            if os.name == "nt":
+                hide_file(CONFIG_FILE)
+
+            messagebox.showinfo("Success", "Device successfully saved to .zkdata")
+
+            # GUI update
+            self.config = cfg  # মেমোরি আপডেট করি যাতে Treeview ঠিক দেখায়
+            self.refresh_devices()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save device: {e}")
 
 
     def edit_device(self):
@@ -178,19 +201,44 @@ class ZKApp:
             messagebox.showwarning("Edit Device", "Please select a device first")
             return
         idx = self.tree.index(selected[0])
-        dev = self.config["devices"][idx]
-        ip = simpledialog.askstring("Edit Device", "Enter Device IP:", initialvalue=dev["ip"])
-        port = simpledialog.askstring("Edit Device", "Enter Port:", initialvalue=str(dev.get("port", 4370)))
-        password = simpledialog.askstring("Edit Device", "Enter Password:", initialvalue=str(dev.get("password", 0)))
+
         try:
-            port = int(port or 4370)
-            password = int(password or 0)
-        except ValueError:
-            messagebox.showerror("Error", "Port and Password must be numbers")
-            return
-        self.config["devices"][idx].update({"ip": ip.strip(), "port": port, "password": password})
-        save_config(self.config)
-        self.refresh_devices()
+            # ফাইল থেকে fresh config লোড
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            else:
+                messagebox.showerror("Error", ".zkdata file not found")
+                return
+
+            dev = cfg["devices"][idx]
+            ip = simpledialog.askstring("Edit Device", "Enter Device IP:", initialvalue=dev["ip"])
+            port = simpledialog.askstring("Edit Device", "Enter Port:", initialvalue=str(dev.get("port", 4370)))
+            password = simpledialog.askstring("Edit Device", "Enter Password:", initialvalue=str(dev.get("password", 0)))
+
+            try:
+                port = int(port or 4370)
+                password = int(password or 0)
+            except ValueError:
+                messagebox.showerror("Error", "Port and Password must be numbers")
+                return
+
+            # Update device in file config
+            cfg["devices"][idx].update({"ip": ip.strip(), "port": port, "password": password})
+
+            # ফাইলে লিখা
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=4)
+            if os.name == "nt":
+                hide_file(CONFIG_FILE)
+
+            # মেমোরি আপডেট ও Treeview refresh
+            self.config = cfg
+            self.refresh_devices()
+            messagebox.showinfo("Success", "Device updated in .zkdata")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to edit device: {e}")
 
     def remove_device(self):
         selected = self.tree.selection()
@@ -198,9 +246,33 @@ class ZKApp:
             messagebox.showwarning("Remove Device", "Please select a device first")
             return
         idx = self.tree.index(selected[0])
-        del self.config["devices"][idx]
-        save_config(self.config)
-        self.refresh_devices()
+
+        try:
+            # ফাইল থেকে fresh config লোড
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+            else:
+                messagebox.showerror("Error", ".zkdata file not found")
+                return
+
+            # remove the device
+            del cfg["devices"][idx]
+
+            # ফাইলে write
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=4)
+            if os.name == "nt":
+                hide_file(CONFIG_FILE)
+
+            # মেমোরি আপডেট ও Treeview refresh
+            self.config = cfg
+            self.refresh_devices()
+            messagebox.showinfo("Success", "Device removed from .zkdata")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to remove device: {e}")
+
 
     # ===== SYNC =====
     def run_sync(self):
