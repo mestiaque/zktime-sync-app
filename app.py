@@ -10,11 +10,17 @@ import time
 
 # ===== PATHS SAFE =====
 if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(os.path.realpath(sys.executable))
+    # BASE_DIR = os.path.dirname(os.path.realpath(sys.executable))
+    BASE_DIR = os.path.join(os.path.expanduser("~"), ".zkteco_sync")
 else:
+    # BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
+os.makedirs(BASE_DIR, exist_ok=True)
+# CONFIG_FILE = os.path.join(BASE_DIR, ".zkdata")
 CONFIG_FILE = os.path.join(BASE_DIR, ".zkdata")
+
+
+
 FIXED_API_URL = "https://payrool.nitbd.com/api/iclock/cdata"
 
 # ===== CONFIG HANDLING =====
@@ -41,6 +47,13 @@ def save_config(cfg):
     # hide file after save
     if os.name == "nt":
         hide_file(CONFIG_FILE)
+
+    except PermissionError:
+        messagebox.showerror(
+            "Permission Error",
+            f"Cannot write config file:\n{CONFIG_FILE}\n\n"
+            "Please close other instances or check antivirus."
+        )
 
 # ===== MAIN APP =====
 class ZKApp:
