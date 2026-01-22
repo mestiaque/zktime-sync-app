@@ -10,13 +10,20 @@ from tkinter import messagebox, simpledialog, scrolledtext, ttk
 from zk_sync import fetch_logs_and_sync
 import time
 
-# ===== PATHS SAFE =====
-if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(os.path.realpath(sys.executable))
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# ===== PATHS SAFE (AppData based) =====
+def get_data_dir():
+    if os.name == "nt":
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+        return os.path.join(base, "ZKTecoSync")
+    else:
+        return os.path.expanduser("~/.zktecosync")
 
-CONFIG_FILE = os.path.join(BASE_DIR, ".zkdata")
+DATA_DIR = get_data_dir()
+os.makedirs(DATA_DIR, exist_ok=True)
+
+CONFIG_FILE = os.path.join(DATA_DIR, ".zkdata")
+
+
 FIXED_API_URL = "https://payrool.nitbd.com/api/iclock/cdata"
 
 # ===== CONFIG HANDLING =====
