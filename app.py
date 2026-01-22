@@ -41,12 +41,13 @@ def hide_file(path):
         pass
 
 def save_config(cfg):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=4)
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4)
 
-    # hide file after save
-    if os.name == "nt":
-        hide_file(CONFIG_FILE)
+        # hide file after save (Windows)
+        if os.name == "nt":
+            hide_file(CONFIG_FILE)
 
     except PermissionError:
         messagebox.showerror(
