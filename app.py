@@ -115,33 +115,49 @@ class ZKApp:
 
     # ===== DEVICE MANAGEMENT =====
     def refresh_devices(self):
-        self.tree.delete(*self.tree.get_children())
-        for i, dev in enumerate(self.config["devices"]):
-            sn = dev.get("sn", "Unknown")
-            self.tree.insert("", "end", values=(dev["ip"], dev.get("port", 4370), sn))
+        # Treeview খালি করা
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # ডিভাইস লিস্ট থেকে ডেটা নিয়ে Treeview-তে দেখানো
+        for dev in self.config.get("devices", []):
+            ip = str(dev.get("ip", ""))
+            port = str(dev.get("port", 4370))
+            sn = str(dev.get("sn", dev.get("password", "N/A")))  # SN না থাকলে password বা N/A দেখাবে
+            self.tree.insert("", "end", values=(ip, port, sn))
 
     def add_device(self):
         ip = simpledialog.askstring("Add Device", "Enter Device IP:")
         if not ip:
             return
+        
         port = simpledialog.askstring("Add Device", "Enter Port (default 4370):")
         password = simpledialog.askstring("Add Device", "Enter Device Password (0 if none):")
+        
         try:
             port = int(port or 4370)
             password = int(password or 0)
         except ValueError:
             messagebox.showerror("Error", "Port and Password must be numbers")
             return
-        self.config["devices"].append({"ip": ip.strip(), "port": port, "password": password})
+        
+        # নতুন ডিভাইস যোগ করা
+        self.config["devices"].append({
+            "ip": ip.strip(),
+            "port": port,
+            "password": password,
+            "sn": "N/A"  # Treeview-তে দেখানোর জন্য
+        })
+        
         save_config(self.config)
-        self.refresh_devices()
+        self.refresh_devices()  # এখানে Treeview আপডেট হবে
 
     def edit_device(self):
         selected = self.tree.selection()
         if not selected:
             messagebox.showwarning("Edit Device", "Please select a device first")
             return
-        idx = int(selected[0])
+        idx = self.tree.index(selected[0])
         dev = self.config["devices"][idx]
         ip = simpledialog.askstring("Edit Device", "Enter Device IP:", initialvalue=dev["ip"])
         port = simpledialog.askstring("Edit Device", "Enter Port:", initialvalue=str(dev.get("port", 4370)))
@@ -161,7 +177,7 @@ class ZKApp:
         if not selected:
             messagebox.showwarning("Remove Device", "Please select a device first")
             return
-        idx = int(selected[0])
+        idx = self.tree.index(selected[0])
         del self.config["devices"][idx]
         save_config(self.config)
         self.refresh_devices()
