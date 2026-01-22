@@ -35,6 +35,7 @@ jobs:
           if (Test-Path "build") { Remove-Item -Recurse -Force build }
           mkdir build
           pyinstaller --onefile --noconsole --name ZKTimeSync `
+            --icon app_icon.ico `
             --hidden-import=zk `
             --hidden-import=requests `
             app.py
