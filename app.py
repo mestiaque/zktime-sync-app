@@ -119,11 +119,14 @@ class ZKApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        # ডিভাইস লিস্ট থেকে ডেটা নিয়ে Treeview-তে দেখানো
-        for dev in self.config.get("devices", []):
+        devices = self.config.get("devices", [])
+        self.log(f"Refreshing devices: {len(devices)} devices")  # debug log
+
+        # ডিভাইস লিস্ট Treeview-এ দেখানো
+        for dev in devices:
             ip = str(dev.get("ip", ""))
             port = str(dev.get("port", 4370))
-            sn = str(dev.get("sn", dev.get("password", "N/A")))  # SN না থাকলে password বা N/A দেখাবে
+            sn = str(dev.get("sn") or dev.get("password", "N/A"))  # SN না থাকলে password বা N/A
             self.tree.insert("", "end", values=(ip, port, sn))
 
     def add_device(self):
@@ -146,11 +149,12 @@ class ZKApp:
             "ip": ip.strip(),
             "port": port,
             "password": password,
-            "sn": "N/A"  # Treeview-তে দেখানোর জন্য
+            "sn": None  # প্রথমে None, পরে refresh বা sync করলে SN আসবে
         })
         
         save_config(self.config)
-        self.refresh_devices()  # এখানে Treeview আপডেট হবে
+        self.refresh_devices()  # Treeview আপডেট হবে
+
 
     def edit_device(self):
         selected = self.tree.selection()
