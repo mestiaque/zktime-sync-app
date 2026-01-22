@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import threading
+import ctypes
 import tkinter as tk
 from tkinter import messagebox, simpledialog, scrolledtext, ttk
 from zk_sync import fetch_logs_and_sync
@@ -9,23 +10,37 @@ import time
 
 # ===== PATHS SAFE =====
 if getattr(sys, "frozen", False):
-    BASE_DIR = os.path.dirname(sys.executable)
+    BASE_DIR = os.path.dirname(os.path.realpath(sys.executable))
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+CONFIG_FILE = os.path.join(BASE_DIR, ".zkdata")
 FIXED_API_URL = "https://payrool.nitbd.com/api/iclock/cdata"
 
 # ===== CONFIG HANDLING =====
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        return {"devices": [], "auto_sync_interval": 0}  # interval in seconds
+        cfg = {"devices": [], "auto_sync_interval": 0}
+        save_config(cfg)
+        return cfg
+
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
+
+def hide_file(path):
+    try:
+        FILE_ATTRIBUTE_HIDDEN = 0x02
+        ctypes.windll.kernel32.SetFileAttributesW(path, FILE_ATTRIBUTE_HIDDEN)
+    except:
+        pass
 
 def save_config(cfg):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=4)
+
+    # hide file after save
+    if os.name == "nt":
+        hide_file(CONFIG_FILE)
 
 # ===== MAIN APP =====
 class ZKApp:
@@ -126,7 +141,7 @@ class ZKApp:
         for dev in devices:
             ip = str(dev.get("ip", ""))
             port = str(dev.get("port", 4370))
-            sn = str(dev.get("sn") or dev.get("password", "N/A"))  # SN না থাকলে password বা N/A
+            sn = str(dev.get("sn") or "N/A")
             self.tree.insert("", "end", values=(ip, port, sn))
 
     def add_device(self):
