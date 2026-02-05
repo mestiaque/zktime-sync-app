@@ -27,7 +27,4 @@ Name: "{commondesktop}\ZKTime Sync"; Filename: "{app}\ZKTimeSync.exe"; IconFilen
 
 
 [Run]
-Filename: "{app}\ZKTimeSync.exe"; Description: "Start ZKTime Sync"; Flags: nowait postinstall skipifsilent
-
-; Ensure the user's .zkteco_sync directory exists and is writable so the app can save config without extra steps
-Filename: "cmd.exe"; Parameters: "/C icacls \"{localappdata}\\ZKTimeSync\" /grant \"{user}\":F /T"; Flags: runhidden shellexec
+Filename: "{app}\ZKTimeSync.exe"; Description: "Launch ZKTimeSync"; Flags: nowait postinstall skipifsilent; Parameters: "/D=""{app}"""
