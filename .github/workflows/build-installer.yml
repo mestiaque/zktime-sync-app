@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pyzk requests
+          pip install pyinstaller pyzk requests tkcalendar
           if (Test-Path "requirements.txt") { pip install -r requirements.txt }
 
       - name: Build EXE
@@ -39,6 +39,12 @@ jobs:
             --hidden-import=zk `
             --hidden-import=requests `
             app.py
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZKTimeSync-exe
+          path: dist/ZKTimeSync.exe
 
       - name: Install Inno Setup
         shell: pwsh

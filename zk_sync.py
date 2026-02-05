@@ -6,14 +6,23 @@ from sync_dup import SyncDUP
 
 dup = SyncDUP()
 
-def fetch_logs_and_sync(api_url, devices, log_fn):
+def fetch_logs_and_sync(api_url, devices, log_fn, sync_date=None):
 
     def log(text):
         log_fn(text)
 
     log("🔄 Starting sync with devices...")
 
-    today = date.today()  # আজকের তারিখ
+    # Parse selected date or use today
+    if sync_date:
+        try:
+            selected_date = datetime.strptime(sync_date, "%Y-%m-%d").date()
+            log(f"📅 Filtering logs for date: {selected_date}")
+        except ValueError:
+            log(f"❌ Invalid date format: {sync_date}, using today")
+            selected_date = date.today()
+    else:
+        selected_date = date.today()
 
     for dev in devices:
         ip = dev.get("ip")
@@ -30,13 +39,14 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
             sn = conn.get_serialnumber()
             log(f"📟 Device SN: {sn}")
 
-            # আগের আজকের সিঙ্ক সময়
+            # Get last sync time for this device
             last_sync = dup.get_last_sync(sn)
-            if not isinstance(last_sync, datetime) or (last_sync and last_sync.date() != today):
-                last_sync = None  # আগের দিনের বা invalid last_sync ignore
+            # Only use last_sync if it's from the same selected date
+            if not isinstance(last_sync, datetime) or (last_sync and last_sync.date() != selected_date):
+                last_sync = None  # Different date or invalid, reset
 
             if last_sync:
-                log(f"🧠 Last sync time today: {last_sync}")
+                log(f"🧠 Last sync time on {selected_date}: {last_sync}")
 
             logs = conn.get_attendance()
             log(f"✔ {len(logs)} log(s) fetched from {ip}")
@@ -45,8 +55,8 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
             sent_count = 0
 
             for l in logs:
-                # ⛔ Skip logs not from today
-                if l.timestamp.date() != today:
+                # Filter by selected date only
+                if l.timestamp.date() != selected_date:
                     continue
 
                 # ⛔ Skip logs already synced today
@@ -65,7 +75,7 @@ def fetch_logs_and_sync(api_url, devices, log_fn):
                     r = requests.post(api_url, json=payload, timeout=10)
 
                     if r.status_code == 200:
-                        log(f"✅ Synced → User {l.user_id}")
+                        log(f"✅ Synced → User {l.user_id} at {l.timestamp.strftime('%H:%M:%S')}")
                         sent_count += 1
 
                         if not max_synced_time or l.timestamp > max_synced_time:
