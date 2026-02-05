@@ -20,8 +20,9 @@ except Exception:
 
 # ===== PATHS SAFE =====
 if getattr(sys, "frozen", False):
-    # BASE_DIR = os.path.dirname(os.path.realpath(sys.executable))
-    BASE_DIR = os.path.join(os.path.expanduser("~"), ".zkteco_sync")
+    # When running as a bundled exe, store config under Local AppData to match installer
+    local_appdata = os.getenv('LOCALAPPDATA') or os.getenv('APPDATA') or os.path.expanduser('~')
+    BASE_DIR = os.path.join(local_appdata, "ZKTimeSync")
 else:
     # BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
