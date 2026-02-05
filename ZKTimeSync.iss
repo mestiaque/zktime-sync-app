@@ -3,13 +3,13 @@ AppName=ZKTime Sync
 AppVersion=1.0.0
 AppId=ZKTimeSync
 AppPublisher=M. ESTIAQUE
-DefaultDirName={localappdata}\ZKTimeSync
+DefaultDirName={pf}\ZKTimeSync
 DefaultGroupName=ZKTime Sync
 OutputDir=Output
 OutputBaseFilename=ZKTimeSyncInstaller
 Compression=lzma
 SolidCompression=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 UninstallDisplayIcon={app}\ZKTimeSync.exe
 
 
@@ -18,7 +18,7 @@ Source: "dist\ZKTimeSync.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Dirs]
-Name: "{localappdata}\ZKTimeSync"; Flags: uninsneveruninstall
+Name: "{app}"; Flags: uninsalwaysuninstall
 
 
 [Icons]
@@ -27,4 +27,4 @@ Name: "{commondesktop}\ZKTime Sync"; Filename: "{app}\ZKTimeSync.exe"; IconFilen
 
 
 [Run]
-Filename: "{app}\ZKTimeSync.exe"; Description: "Launch ZKTimeSync"; Flags: nowait postinstall skipifsilent; Parameters: "/D=""{app}"""
+Filename: "{app}\ZKTimeSync.exe"; Description: "Launch ZKTimeSync"; Flags: nowait postinstall skipifsilent

@@ -20,17 +20,13 @@ except Exception:
 
 # ===== PATHS SAFE =====
 if getattr(sys, "frozen", False):
-    # When running as a bundled exe, store config under Local AppData to match installer
-    local_appdata = os.getenv('LOCALAPPDATA') or os.getenv('APPDATA') or os.path.expanduser('~')
-    BASE_DIR = os.path.join(local_appdata, "ZKTimeSync")
+    # When running as a bundled exe, use the app installation directory
+    BASE_DIR = os.path.dirname(sys.executable)
 else:
-    # BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    # During development, use script directory
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(BASE_DIR, exist_ok=True)
-# CONFIG_FILE = os.path.join(BASE_DIR, ".zkdata")
 CONFIG_FILE = os.path.join(BASE_DIR, ".zkdata")
-
-
 
 FIXED_API_URL = "https://payrool.nitbd.com/api/iclock/cdata"
 

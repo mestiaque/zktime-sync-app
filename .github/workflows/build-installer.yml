@@ -40,12 +40,6 @@ jobs:
             --hidden-import=requests `
             app.py
 
-      - name: Upload EXE artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ZKTimeSync-exe
-          path: dist/ZKTimeSync.exe
-
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup -y
