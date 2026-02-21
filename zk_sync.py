@@ -6,23 +6,29 @@ from sync_dup import SyncDUP
 
 dup = SyncDUP()
 
-def fetch_logs_and_sync(api_url, devices, log_fn, sync_date=None):
+def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None):
 
     def log(text):
         log_fn(text)
 
     log("🔄 Starting sync with devices...")
 
-    # Parse selected date or use today
-    if sync_date:
+    # Parse selected date range or use today
+    if start_date and end_date:
         try:
-            selected_date = datetime.strptime(sync_date, "%Y-%m-%d").date()
-            log(f"📅 Filtering logs for date: {selected_date}")
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+            log(f"📅 Filtering logs for date range: {start_dt} to {end_dt}")
         except ValueError:
-            log(f"❌ Invalid date format: {sync_date}, using today")
-            selected_date = date.today()
+            log(f"❌ Invalid date format, using today")
+            today = date.today()
+            start_dt = today
+            end_dt = today
     else:
-        selected_date = date.today()
+        today = date.today()
+        start_dt = today
+        end_dt = today
+        log(f"📅 Filtering logs for date: {today}")
 
     for dev in devices:
         ip = dev.get("ip")
@@ -41,12 +47,13 @@ def fetch_logs_and_sync(api_url, devices, log_fn, sync_date=None):
 
             # Get last sync time for this device
             last_sync = dup.get_last_sync(sn)
-            # Only use last_sync if it's from the same selected date
-            if not isinstance(last_sync, datetime) or (last_sync and last_sync.date() != selected_date):
-                last_sync = None  # Different date or invalid, reset
+            # Only use last_sync if it's from the same date range
+            if last_sync and isinstance(last_sync, datetime):
+                if last_sync.date() < start_dt or last_sync.date() > end_dt:
+                    last_sync = None  # Different date range, reset
 
             if last_sync:
-                log(f"🧠 Last sync time on {selected_date}: {last_sync}")
+                log(f"🧠 Last sync time: {last_sync}")
 
             logs = conn.get_attendance()
             log(f"✔ {len(logs)} log(s) fetched from {ip}")
@@ -55,11 +62,12 @@ def fetch_logs_and_sync(api_url, devices, log_fn, sync_date=None):
             sent_count = 0
 
             for l in logs:
-                # Filter by selected date only
-                if l.timestamp.date() != selected_date:
+                # Filter by date range
+                log_date = l.timestamp.date()
+                if log_date < start_dt or log_date > end_dt:
                     continue
 
-                # ⛔ Skip logs already synced today
+                # ⛔ Skip logs already synced
                 if last_sync and l.timestamp <= last_sync:
                     continue
 
