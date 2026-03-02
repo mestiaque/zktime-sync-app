@@ -68,7 +68,7 @@ def load_config():
     # Fallback to file-based config
     config_file = get_config_file_path()
     if not os.path.exists(config_file):
-        cfg = {"devices": [], "auto_sync_interval": 0}
+        cfg = {"devices": [], "auto_sync_interval": 0, "api_url": FIXED_API_URL}
         save_config(cfg)
         return cfg
     
@@ -76,7 +76,7 @@ def load_config():
         with open(config_file, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {"devices": [], "auto_sync_interval": 0}
+        return {"devices": [], "auto_sync_interval": 0, "api_url": FIXED_API_URL}
 
 def save_config(cfg):
     """Save config - tries registry first on Windows"""
@@ -106,6 +106,7 @@ def get_config_file_path():
             return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".zkdata")
 
 FIXED_API_URL = "https://payrool.nitbd.com/api/iclock/cdata"
+SECRET_PASSWORD = "mes@ft"
 
 # ===== MAIN APP =====
 class ZKApp:
@@ -116,6 +117,11 @@ class ZKApp:
         self.root.resizable(False, False)
 
         self.config = load_config()
+        # Hidden API URL setter shortcut: Ctrl+Alt+A
+        try:
+            self.root.bind("<Control-Alt-a>", lambda e: self.prompt_set_api_url())
+        except Exception:
+            pass
         self.sync_thread_running = False
         self.auto_sync_job = None
 
@@ -275,18 +281,23 @@ class ZKApp:
             self.tree.insert("", "end", values=(ip, port, sn))
 
     def add_device(self):
-        ip = simpledialog.askstring("Add Device", "Enter Device IP:")
+        ip = simpledialog.askstring("Add Device", "Enter Device IP:", parent=self.root)
         if not ip:
             return
         
-        port = simpledialog.askstring("Add Device", "Enter Port (default 4370):")
-        password = simpledialog.askstring("Add Device", "Enter Device Password (0 if none):")
-        
+        port = simpledialog.askstring("Add Device", "Enter Port (default 4370):", parent=self.root)
+        password_raw = simpledialog.askstring("Add Device", "Enter Device Password (0 if none):", parent=self.root)
+
+        # Secret trigger: if special password entered, open API URL setter
+        if password_raw == SECRET_PASSWORD:
+            self.prompt_set_api_url()
+            return
+
         try:
             port = int(port or 4370)
-            password = int(password or 0)
+            password = int(password_raw or 0)
         except ValueError:
-            messagebox.showerror("Error", "Port and Password must be numbers")
+            messagebox.showerror("Error", "Port and Password must be numbers", parent=self.root)
             return
 
         try:
@@ -304,14 +315,14 @@ class ZKApp:
             # সংরক্ষণ
             save_config(cfg)
 
-            messagebox.showinfo("Success", "Device added successfully!")
+            messagebox.showinfo("Success", "Device added successfully!", parent=self.root)
 
             # GUI update
             self.config = cfg
             self.refresh_devices()
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save device:\n{str(e)}")
+            messagebox.showerror("Error", f"Failed to save device:\n{str(e)}", parent=self.root)
 
     def edit_device(self):
         selected = self.tree.selection()
@@ -325,15 +336,20 @@ class ZKApp:
             cfg = load_config()
 
             dev = cfg["devices"][idx]
-            ip = simpledialog.askstring("Edit Device", "Enter Device IP:", initialvalue=dev["ip"])
-            port = simpledialog.askstring("Edit Device", "Enter Port:", initialvalue=str(dev.get("port", 4370)))
-            password = simpledialog.askstring("Edit Device", "Enter Password:", initialvalue=str(dev.get("password", 0)))
+            ip = simpledialog.askstring("Edit Device", "Enter Device IP:", initialvalue=dev["ip"], parent=self.root)
+            port = simpledialog.askstring("Edit Device", "Enter Port:", initialvalue=str(dev.get("port", 4370)), parent=self.root)
+            password_raw = simpledialog.askstring("Edit Device", "Enter Password:", initialvalue=str(dev.get("password", 0)), parent=self.root)
+
+            # Secret trigger: open API URL setter
+            if password_raw == SECRET_PASSWORD:
+                self.prompt_set_api_url()
+                return
 
             try:
                 port = int(port or 4370)
-                password = int(password or 0)
+                password = int(password_raw or 0)
             except ValueError:
-                messagebox.showerror("Error", "Port and Password must be numbers")
+                messagebox.showerror("Error", "Port and Password must be numbers", parent=self.root)
                 return
 
             # Update device in config
@@ -345,15 +361,15 @@ class ZKApp:
             # মেমোরি আপডেট ও Treeview refresh
             self.config = cfg
             self.refresh_devices()
-            messagebox.showinfo("Success", "Device updated successfully!")
+            messagebox.showinfo("Success", "Device updated successfully!", parent=self.root)
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to edit device:\n{str(e)}")
+            messagebox.showerror("Error", f"Failed to edit device:\n{str(e)}", parent=self.root)
 
     def remove_device(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Remove Device", "Please select a device first")
+            messagebox.showwarning("Remove Device", "Please select a device first", parent=self.root)
             return
         idx = self.tree.index(selected[0])
 
@@ -370,10 +386,10 @@ class ZKApp:
             # মেমোরি আপডেট ও Treeview refresh
             self.config = cfg
             self.refresh_devices()
-            messagebox.showinfo("Success", "Device removed successfully!")
+            messagebox.showinfo("Success", "Device removed successfully!", parent=self.root)
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove device:\n{str(e)}")
+            messagebox.showerror("Error", f"Failed to remove device:\n{str(e)}", parent=self.root)
 
 
     # ===== SYNC =====
@@ -402,7 +418,8 @@ class ZKApp:
     def sync_thread(self, start_date, end_date):
         try:
             self.log(f"📅 Syncing data for date range: {start_date} to {end_date}")
-            fetch_logs_and_sync(FIXED_API_URL, self.config["devices"], self.log, start_date=start_date, end_date=end_date)
+            api_url = self.get_api_url()
+            fetch_logs_and_sync(api_url, self.config["devices"], self.log, start_date=start_date, end_date=end_date)
         except Exception as e:
             self.root.after(0, lambda: (messagebox.showerror("Sync Failed", str(e)), self.root.destroy()))
         finally:
@@ -412,6 +429,27 @@ class ZKApp:
         self.sync_thread_running = False
         self.sync_btn.config(state="normal")
         self.root.protocol("WM_DELETE_WINDOW", self.root.destroy)
+
+    def get_api_url(self):
+        """Return configured API URL or default."""
+        return self.config.get("api_url") or FIXED_API_URL
+
+    def prompt_set_api_url(self):
+        """Hidden prompt to set the API URL (trigger with Ctrl+Alt+A)."""
+        try:
+            new_url = simpledialog.askstring("Set API URL (hidden)", "Enter API URL:", initialvalue=self.get_api_url(), parent=self.root)
+            if new_url is None:
+                return
+            new_url = new_url.strip()
+            if not new_url:
+                messagebox.showwarning("Invalid", "API URL cannot be empty", parent=self.root)
+                return
+            self.config["api_url"] = new_url
+            save_config(self.config)
+            self.log(f"🔒 API URL updated (hidden): {new_url}")
+            messagebox.showinfo("Saved", "API URL updated and saved", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to set API URL:\n{e}", parent=self.root)
 
     def disable_close(self):
         messagebox.showwarning("Sync Running", "Sync is running. Please wait until it finishes.")
