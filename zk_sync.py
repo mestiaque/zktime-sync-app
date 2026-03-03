@@ -4,6 +4,16 @@ from datetime import datetime, date
 import time
 from sync_dup import SyncDUP
 
+# ZKTeco Verify Type Mapping
+verifyTypes = {
+    '0': 'Password/Other',
+    '1': 'Fingerprint',
+    '2': 'Card',
+    '3': 'Password',
+    '15': 'Face',
+    '25': 'Palm'
+}
+
 dup = SyncDUP()
 
 def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None):
@@ -75,6 +85,8 @@ def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None
                     "user_id": l.user_id,
                     "timestamp": l.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                     "status": l.status,
+                    "type_code": str(l.verify_type) if hasattr(l, 'verify_type') else '0',
+                    "type_name": verifyTypes.get(str(l.verify_type), 'Unknown') if hasattr(l, 'verify_type') else 'Other',
                     "device": ip,
                     "device_sn": sn
                 }
