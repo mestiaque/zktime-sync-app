@@ -1,6 +1,6 @@
 from zk import ZK
 import requests
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import time
 from sync_dup import SyncDUP
 
