@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+Output/
+*.spec
+.zkdata
+last_sync.json
+last_sync.json.tmp

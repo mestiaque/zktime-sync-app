@@ -2,46 +2,50 @@
 import json
 from datetime import datetime
 import os
+import sys
 import threading
 
+
+def get_data_dir():
+    """Persistent, user-writable folder (NOT the PyInstaller temp folder)."""
+    if os.name == "nt":
+        base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ZKTimeSync")
+    elif getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
 class SyncDUP:
+    """Remembers the newest successfully synced log time per device SN."""
+
     def __init__(self, filename="last_sync.json"):
-
-        # 🔒 Always store file beside this script
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.filename = os.path.join(base_dir, filename)
+        self.filename = os.path.join(get_data_dir(), filename)
         self.lock = threading.Lock()  # 🔐 Thread safety
-
-        # 📂 If file doesn't exist, create it safely
-        if not os.path.exists(self.filename):
-            with open(self.filename, "w") as f:
-                json.dump({}, f)
 
         # 📥 Load existing data
         try:
-            with open(self.filename, "r") as f:
+            with open(self.filename, "r", encoding="utf-8") as f:
                 self.data = json.load(f)
-        except Exception as e:
-            print(f"⚠️ Failed to load sync file: {e}")
+        except Exception:
             self.data = {}
 
     def get_last_sync(self, sn):
         with self.lock:
-            try:
-                with open(self.filename, "r") as f:
-                    data = json.load(f)
-                    ts = data.get(str(sn))
-                    if ts:
-                        return datetime.fromisoformat(ts)
-            except:
-                pass
+            ts = self.data.get(str(sn))
+            if ts:
+                try:
+                    return datetime.fromisoformat(ts)
+                except ValueError:
+                    return None
             return None
 
     def save_last_sync(self, sn, dt: datetime):
         with self.lock:
             self.data[str(sn)] = dt.isoformat()
-
-            with open(self.filename, "w") as f:
+            tmp = self.filename + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=4)
-
-            print(f"💾 Last sync saved for {sn}: {dt}")
+            os.replace(tmp, self.filename)

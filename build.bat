@@ -10,8 +10,12 @@ REM ---------------------------
 REM Build EXE
 REM ---------------------------
 pyinstaller --noconsole --onefile --name ZKTimeSync ^
+    --icon app_icon.ico ^
     --hidden-import=zk ^
     --hidden-import=requests ^
+    --hidden-import=babel.numbers ^
+    --collect-data=babel ^
+    --collect-data=tkcalendar ^
     app.py
 
 REM ---------------------------
