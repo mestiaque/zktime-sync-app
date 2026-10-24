@@ -6,7 +6,7 @@ import copy
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from tkinter import font as tkfont
-from zk_sync import fetch_logs_and_sync
+from zk_sync import fetch_logs_and_sync, check_device
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import requests
@@ -280,6 +280,72 @@ class Tooltip:
             self.tip = None
 
 
+CLOCK_DRIFT_WARN = timedelta(minutes=5)
+STATUS_RECHECK_MS = 5 * 60 * 1000
+
+# state -> (label, dot color)
+DEVICE_STATES = {
+    "online": ("Online", "#16A34A"),
+    "warning": ("Online", "#D97706"),
+    "offline": ("Offline", "#DC2626"),
+    "checking": ("Checking…", "#60A5FA"),
+    "unknown": ("Unknown", "#94A3B8"),
+}
+
+
+def make_dot(color, size=14, radius=5):
+    """Small anti-aliased status dot for the device table"""
+    img = tk.PhotoImage(width=size, height=size)
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    cx = cy = (size - 1) / 2
+    for y in range(size):
+        row = []
+        for x in range(size):
+            d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            a = max(0.0, min(1.0, radius + 0.5 - d))  # edge coverage
+            if a <= 0:
+                row.append("#FFFFFF")
+            else:
+                # blend onto white
+                row.append("#%02x%02x%02x" % tuple(int(255 + (c - 255) * a) for c in (r, g, b)))
+        img.put("{" + " ".join(row) + "}", to=(0, y))
+        for x in range(size):
+            if ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 > radius + 0.5:
+                img.tk.call(img.name, "transparency", "set", x, y, 1)  # corners see-through
+    return img
+
+
+class RowTooltip:
+    """Hover tooltip for Treeview rows; text comes from a callback(item_id)"""
+
+    def __init__(self, tree, get_text):
+        self.tree, self.get_text = tree, get_text
+        self.tip, self.item = None, None
+        tree.bind("<Motion>", self.on_motion, add="+")
+        tree.bind("<Leave>", lambda e: self.hide(), add="+")
+
+    def on_motion(self, event):
+        item = self.tree.identify_row(event.y)
+        if item == self.item:
+            return
+        self.hide()
+        self.item = item
+        text = self.get_text(item) if item else ""
+        if not text:
+            return
+        self.tip = tk.Toplevel(self.tree)
+        self.tip.wm_overrideredirect(True)
+        tk.Label(self.tip, text=text, bg="#1E293B", fg="#FFFFFF", padx=10, pady=6, justify="left",
+                 font=(tkfont.nametofont("TkDefaultFont").actual("family"), 9)).pack()
+        self.tip.wm_geometry(f"+{event.x_root + 14}+{event.y_root + 16}")
+
+    def hide(self):
+        self.item = None
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
+
 def make_card(parent, title, subtitle=None):
     """White card with a thin border; returns (outer, body)"""
     outer = tk.Frame(parent, bg=COLORS["card"], highlightthickness=1,
@@ -331,13 +397,16 @@ class DeviceDialog(tk.Toplevel):
         self.entries[2].configure(show="•")
 
         self.error_var = tk.StringVar()
-        tk.Label(body, textvariable=self.error_var, bg=COLORS["card"], fg=COLORS["danger"],
-                 anchor="w").grid(row=8, column=0, columnspan=2, sticky="ew")
+        self.msg_label = tk.Label(body, textvariable=self.error_var, bg=COLORS["card"], fg=COLORS["danger"],
+                                  anchor="w", justify="left", wraplength=320)
+        self.msg_label.grid(row=8, column=0, columnspan=2, sticky="ew")
 
         btns = ttk.Frame(body, style="Card.TFrame")
-        btns.grid(row=9, column=0, columnspan=2, sticky="e", pady=(12, 0))
-        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=(0, 8))
-        ttk.Button(btns, text="Save Device", style="Primary.TButton", command=self.on_save).pack(side="left")
+        btns.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.test_btn = ttk.Button(btns, text="Test", command=self.on_test)
+        self.test_btn.pack(side="left")
+        ttk.Button(btns, text="Save Device", style="Primary.TButton", command=self.on_save).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right", padx=8)
 
         self.bind("<Return>", lambda e: self.on_save())
         self.bind("<Escape>", lambda e: self.destroy())
@@ -352,30 +421,60 @@ class DeviceDialog(tk.Toplevel):
         except tk.TclError:
             pass
 
-    def on_save(self):
-        ip = self.ip_var.get().strip()
-        pwd_raw = self.pwd_var.get().strip()
+    def show_message(self, text, color="danger"):
+        self.msg_label.configure(fg=COLORS[color])
+        self.error_var.set(text)
 
+    def parse_fields(self):
+        """Validated {ip, port, password}, or None after showing the error"""
+        ip = self.ip_var.get().strip()
+        if not ip:
+            self.show_message("IP address is required")
+            return None
+        try:
+            port = int(self.port_var.get().strip() or 4370)
+            password = int(self.pwd_var.get().strip() or 0)
+        except ValueError:
+            self.show_message("Port and Comm Key must be numbers")
+            return None
+        if not 1 <= port <= 65535:
+            self.show_message("Port must be between 1 and 65535")
+            return None
+        return {"ip": ip, "port": port, "password": password}
+
+    def on_test(self):
+        data = self.parse_fields()
+        if not data:
+            return
+        self.show_message(f"Connecting to {data['ip']}:{data['port']}…", "muted")
+        self.test_btn.state(["disabled"])
+
+        def worker():
+            res = check_device(data["ip"], data["port"], data["password"])
+            if res["ok"]:
+                msg = (f"✔ Connected — SN {res['sn']}", "success")
+            else:
+                msg = (f"✖ {res['error']}", "danger")
+            self.after(0, lambda: self._test_done(*msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _test_done(self, text, color):
+        if self.winfo_exists():
+            self.test_btn.state(["!disabled"])
+            self.show_message(text, color)
+
+    def on_save(self):
         # Secret trigger: special password opens the API URL setter
-        if pwd_raw == SECRET_PASSWORD:
+        if self.pwd_var.get().strip() == SECRET_PASSWORD:
             self.result = {"secret": True}
             self.destroy()
             return
 
-        if not ip:
-            self.error_var.set("IP address is required")
+        data = self.parse_fields()
+        if not data:
             return
-        try:
-            port = int(self.port_var.get().strip() or 4370)
-            password = int(pwd_raw or 0)
-        except ValueError:
-            self.error_var.set("Port and Comm Key must be numbers")
-            return
-        if not 1 <= port <= 65535:
-            self.error_var.set("Port must be between 1 and 65535")
-            return
-
-        self.result = {"ip": ip, "port": port, "password": password}
+        self.result = data
         self.destroy()
 
     def show(self):
@@ -514,6 +613,9 @@ class ZKApp:
             pass
         self.sync_thread_running = False
         self.auto_sync_job = None
+        self.device_status = {}   # (ip, port) -> {"state", "detail", "checked"}
+        self.checks_running = 0
+        self.waiting_sync = None
 
         self.build_header()
         self.build_status_bar()  # packed before the body so it always stays visible
@@ -533,6 +635,10 @@ class ZKApp:
 
         # Initial populate tree
         self.refresh_devices()
+
+        # Check device connections now and every few minutes
+        self.root.after(600, self.check_devices)
+        self.root.after(STATUS_RECHECK_MS, self.periodic_check)
 
         # Start auto sync if configured
         current = self.config.get("auto_sync_interval", 0)
@@ -583,12 +689,15 @@ class ZKApp:
 
         table = ttk.Frame(body, style="Card.TFrame")
         table.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(table, columns=("IP", "Port", "SN"), show="headings", height=6,
+        self.dots = {state: make_dot(color) for state, (_, color) in DEVICE_STATES.items()}
+        self.tree = ttk.Treeview(table, columns=("IP", "Port", "SN"), show="tree headings", height=6,
                                  selectmode="browse")
+        self.tree.heading("#0", text="STATUS", anchor="w")
+        self.tree.column("#0", width=120, anchor="w", stretch=False)
         self.tree.heading("IP", text="IP ADDRESS", anchor="w")
         self.tree.heading("Port", text="PORT", anchor="w")
         self.tree.heading("SN", text="SERIAL NUMBER", anchor="w")
-        self.tree.column("IP", width=170, anchor="w")
+        self.tree.column("IP", width=150, anchor="w")
         self.tree.column("Port", width=70, anchor="w", stretch=False)
         self.tree.column("SN", width=200, anchor="w")
         self.tree.tag_configure("odd", background="#F8FAFC")
@@ -604,6 +713,7 @@ class ZKApp:
         self.tree.bind("<Double-1>", lambda e: self.edit_device())
         self.tree.bind("<Delete>", lambda e: self.remove_device())
         self.tree.bind("<<TreeviewSelect>>", lambda e: self.update_device_buttons())
+        RowTooltip(self.tree, self.status_tooltip)
 
         btns = ttk.Frame(body, style="Card.TFrame")
         btns.pack(fill="x", pady=(12, 0))
@@ -614,6 +724,9 @@ class ZKApp:
         self.remove_btn.pack(side="left")
         self.device_count_var = tk.StringVar()
         ttk.Label(btns, textvariable=self.device_count_var, style="Muted.TLabel").pack(side="right")
+        self.check_btn = ttk.Button(btns, text="↻  Check", command=self.check_devices)
+        self.check_btn.pack(side="right", padx=(0, 12))
+        Tooltip(self.check_btn, "Check device connections")
         return outer
 
     def build_sync_card(self, parent):
@@ -789,6 +902,10 @@ class ZKApp:
 
     # ===== DEVICE MANAGEMENT =====
     def refresh_devices(self):
+        # selection ধরে রাখি
+        selected = self.tree.selection()
+        sel_idx = self.tree.index(selected[0]) if selected else None
+
         # Treeview খালি করা
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -800,7 +917,14 @@ class ZKApp:
             ip = str(dev.get("ip", ""))
             port = str(dev.get("port", 4370))
             sn = str(dev.get("sn") or "Not synced yet")
-            self.tree.insert("", "end", values=(ip, port, sn), tags=("odd",) if i % 2 else ())
+            state = self.device_status.get(self.device_key(dev), {}).get("state", "unknown")
+            label = DEVICE_STATES[state][0]
+            self.tree.insert("", "end", text=f" {label}", image=self.dots[state],
+                             values=(ip, port, sn), tags=("odd",) if i % 2 else ())
+
+        children = self.tree.get_children()
+        if sel_idx is not None and sel_idx < len(children):
+            self.tree.selection_set(children[sel_idx])
 
         if devices:
             self.empty_label.place_forget()
@@ -813,6 +937,78 @@ class ZKApp:
         state = "!disabled" if self.tree.selection() else "disabled"
         self.edit_btn.state([state])
         self.remove_btn.state([state])
+
+    # ===== DEVICE STATUS =====
+    @staticmethod
+    def device_key(dev):
+        return (str(dev.get("ip", "")), int(dev.get("port", 4370) or 4370))
+
+    def set_device_status(self, dev, state, detail=""):
+        self.device_status[self.device_key(dev)] = {"state": state, "detail": detail,
+                                                    "checked": datetime.now()}
+
+    def status_tooltip(self, item):
+        idx = self.tree.index(item)
+        devices = self.config.get("devices", [])
+        if idx >= len(devices):
+            return ""
+        info = self.device_status.get(self.device_key(devices[idx]))
+        if not info:
+            return "Not checked yet"
+        if info["state"] == "checking":
+            return "Checking connection…"
+        lines = [info["detail"]] if info["detail"] else []
+        lines.append(f"Checked at {info['checked']:%I:%M %p}")
+        return "\n".join(lines)
+
+    def check_devices(self, indices=None):
+        """Test device connections in the background and update the STATUS column"""
+        if self.sync_thread_running:
+            return  # sync is talking to the devices right now
+        devices = self.config.get("devices", [])
+        if indices is None:
+            indices = range(len(devices))
+        targets = [copy.deepcopy(devices[i]) for i in indices if i < len(devices)]
+        if not targets:
+            return
+        for dev in targets:
+            self.set_device_status(dev, "checking")
+        self.checks_running += len(targets)
+        self.check_btn.state(["disabled"])
+        self.refresh_devices()
+
+        for dev in targets:
+            threading.Thread(target=self._check_worker, args=(dev,), daemon=True).start()
+
+    def _check_worker(self, dev):
+        res = check_device(dev.get("ip"), dev.get("port", 4370), dev.get("password", 0))
+        self.root.after(0, lambda: self._check_done(dev, res))
+
+    def _check_done(self, dev, res):
+        self.checks_running = max(0, self.checks_running - 1)
+        if res["ok"]:
+            detail, state = f"Connected · SN {res['sn']}", "online"
+            device_time = res.get("time")
+            if isinstance(device_time, datetime):
+                drift = device_time - datetime.now()
+                if abs(drift) > CLOCK_DRIFT_WARN:
+                    minutes = int(abs(drift).total_seconds() // 60)
+                    way = "ahead" if drift.total_seconds() > 0 else "behind"
+                    detail += f"\n⚠ Device clock is {minutes} min {way} ({device_time:%Y-%m-%d %H:%M})"
+                    state = "warning"
+            self.set_device_status(dev, state, detail)
+            self.update_serials({dev.get("ip"): res["sn"]}, refresh=False)
+        else:
+            self.set_device_status(dev, "offline", res["error"])
+            self.log(f"⚠ Device {dev.get('ip')} offline: {res['error']}")
+        if self.checks_running == 0:
+            self.check_btn.state(["!disabled"])
+        self.refresh_devices()
+
+    def periodic_check(self):
+        if not self.sync_thread_running and self.checks_running == 0:
+            self.check_devices()
+        self.root.after(STATUS_RECHECK_MS, self.periodic_check)
 
     def ask_device(self, title, device=None):
         return DeviceDialog(self.root, title, device).show()
@@ -839,6 +1035,7 @@ class ZKApp:
             self.config = cfg
             self.refresh_devices()
             self.log(f"✅ Device added: {data['ip']}:{data['port']}")
+            self.check_devices([len(cfg["devices"]) - 1])
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save device:\n{str(e)}", parent=self.root)
@@ -874,6 +1071,7 @@ class ZKApp:
             self.config = cfg
             self.refresh_devices()
             self.log(f"✅ Device updated: {data['ip']}:{data['port']}")
+            self.check_devices([idx])
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to edit device:\n{str(e)}", parent=self.root)
@@ -893,7 +1091,8 @@ class ZKApp:
             cfg = load_config()
 
             # remove the device
-            del cfg["devices"][idx]
+            removed = cfg["devices"].pop(idx)
+            self.device_status.pop(self.device_key(removed), None)
 
             # সংরক্ষণ
             save_config(cfg)
@@ -938,6 +1137,12 @@ class ZKApp:
         if self.sync_thread_running:
             self.log("⚠ Sync already running...")
             return False
+        if self.checks_running:
+            # a device accepts one connection at a time - wait for the status check
+            if self.waiting_sync is None:
+                self.log("⏳ Waiting for device check to finish…")
+            self.waiting_sync = self.root.after(500, lambda: self._resume_sync(start_date, end_date, incremental))
+            return True
         self.sync_thread_running = True
         self.sync_btn.state(["disabled"])
         self.sync_btn.configure(text="Syncing…")
@@ -950,6 +1155,10 @@ class ZKApp:
                          daemon=True).start()
         return True
 
+    def _resume_sync(self, start_date, end_date, incremental):
+        self.waiting_sync = None
+        self.start_sync(start_date, end_date, incremental)
+
     def sync_thread(self, devices, start_date, end_date, incremental):
         serials = {}
         ok = False
@@ -958,6 +1167,7 @@ class ZKApp:
             serials = fetch_logs_and_sync(api_url, devices, self.log, start_date=start_date,
                                           end_date=end_date, incremental=incremental) or {}
             ok = True
+            self.root.after(0, lambda: self.mark_sync_status(devices, serials))
         except Exception as e:
             msg = str(e)
             self.log(f"❌ Sync failed: {msg}")
@@ -978,7 +1188,16 @@ class ZKApp:
                                + ("" if ok else "  (failed)"))
         self.update_serials(serials or {})
 
-    def update_serials(self, serials):
+    def mark_sync_status(self, devices, serials):
+        """Sync already tried every device - reuse that as the connection status"""
+        for dev in devices:
+            if dev.get("ip") in serials:
+                self.set_device_status(dev, "online", f"Connected during sync · SN {serials[dev['ip']]}")
+            else:
+                self.set_device_status(dev, "offline", "Could not connect during sync (see Activity Log)")
+        self.refresh_devices()
+
+    def update_serials(self, serials, refresh=True):
         """Store device SNs read during sync so the Device List shows them"""
         changed = False
         for dev in self.config.get("devices", []):
@@ -988,7 +1207,8 @@ class ZKApp:
                 changed = True
         if changed:
             save_config(self.config)
-            self.refresh_devices()
+            if refresh:
+                self.refresh_devices()
 
     def get_api_url(self):
         """Return configured API URL or default."""

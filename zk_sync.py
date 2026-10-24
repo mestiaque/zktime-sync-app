@@ -59,6 +59,49 @@ def _post_with_retry(session, api_url, payload, log):
     return False
 
 
+def friendly_error(e):
+    """Short, human readable reason for a failed device connection"""
+    text = str(e)
+    lower = text.lower()
+    if "unauth" in lower:
+        return "Wrong Comm Key (password)"
+    if "timed out" in lower or "timeout" in lower:
+        return "No response - check IP, power and network"
+    if "refused" in lower:
+        return "Connection refused - check port / firewall"
+    if "unreachable" in lower or "no route" in lower or "can't reach" in lower:
+        return "Network unreachable - device not on this network"
+    if "getaddrinfo" in lower or "name or service" in lower:
+        return "Invalid IP address"
+    return text or e.__class__.__name__
+
+
+def check_device(ip, port=4370, password=0, timeout=5):
+    """
+    Quick connection test: connect, read SN + device clock, disconnect.
+    Does not disable the device or touch attendance logs.
+    """
+    conn = None
+    try:
+        # ommit_ping: pyzk's ping runs a console command (flashes a window in the .exe)
+        zk = ZK(ip, port=port, timeout=timeout, password=password, ommit_ping=True)
+        conn = zk.connect()
+        sn = conn.get_serialnumber()
+        try:
+            device_time = conn.get_time()
+        except Exception:
+            device_time = None
+        return {"ok": True, "sn": sn, "time": device_time, "error": ""}
+    except Exception as e:
+        return {"ok": False, "sn": None, "time": None, "error": friendly_error(e)}
+    finally:
+        if conn:
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
+
+
 def _fetch_device_logs(ip, port, pwd, log):
     """Connect, read SN + attendance, and release the device immediately."""
     conn = None
@@ -120,7 +163,7 @@ def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None
         try:
             sn, logs = _fetch_device_logs(ip, port, pwd, log)
         except Exception as e:
-            log(f"[ERROR] Connection/Fetch failed for {ip}: {e}")
+            log(f"[ERROR] Connection/Fetch failed for {ip}: {friendly_error(e)} ({e})")
             continue
 
         serials[ip] = sn
