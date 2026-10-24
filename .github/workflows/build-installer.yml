@@ -28,6 +28,15 @@ jobs:
           pip install pyinstaller pyzk requests tkcalendar
           if (Test-Path "requirements.txt") { pip install -r requirements.txt }
 
+      - name: Set version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart("v") }
+          else { $v = "0.0.${{ github.run_number }}-dev" }
+          "APP_VERSION = `"$v`"" | Set-Content -Encoding utf8 version.py
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Building version $v"
+
       - name: Build EXE
         shell: pwsh
         run: |
@@ -49,7 +58,9 @@ jobs:
 
       - name: Build Installer
         shell: pwsh
-        run: iscc ZKTimeSync.iss
+        run: |
+          $iv = ($env:VERSION -split "-")[0]
+          iscc "/DMyAppVersion=$iv" ZKTimeSync.iss
 
       - name: Upload Installer Artifact
         uses: actions/upload-artifact@v6

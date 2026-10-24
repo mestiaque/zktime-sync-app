@@ -7,6 +7,9 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from tkinter import font as tkfont
 from zk_sync import fetch_logs_and_sync, check_device
+from sync_dup import get_data_dir
+from version import APP_VERSION
+import updater
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 import requests
@@ -69,7 +72,7 @@ def load_config():
     # Fallback to file-based config
     config_file = get_config_file_path()
     if not os.path.exists(config_file):
-        cfg = {"devices": [], "auto_sync_interval": 0, "api_url": FIXED_API_URL}
+        cfg = load_legacy_config() or {"devices": [], "auto_sync_interval": 0, "api_url": FIXED_API_URL}
         save_config(cfg)
         return cfg
     
@@ -78,6 +81,24 @@ def load_config():
             return json.load(f)
     except Exception:
         return {"devices": [], "auto_sync_interval": 0, "api_url": FIXED_API_URL}
+
+def load_legacy_config():
+    """Config written by older versions (hidden .zkdata in ~/.zkteco_sync or next to the exe)"""
+    candidates = [os.path.join(os.path.expanduser("~"), ".zkteco_sync", ".zkdata")]
+    if getattr(sys, "frozen", False):
+        candidates.append(os.path.join(os.path.dirname(sys.executable), ".zkdata"))
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if isinstance(cfg, dict) and isinstance(cfg.get("devices"), list):
+                cfg.setdefault("auto_sync_interval", 0)
+                cfg["api_url"] = cfg.get("api_url") or FIXED_API_URL
+                return cfg
+        except Exception:
+            continue
+    return None
+
 
 def save_config(cfg):
     """Save config - tries registry first on Windows"""
@@ -281,6 +302,9 @@ class Tooltip:
 
 
 CLOCK_DRIFT_WARN = timedelta(minutes=5)
+UPDATE_CHECK_MS = 6 * 60 * 60 * 1000
+FIRST_AUTO_SYNC_MS = 60 * 1000
+LOG_KEEP_DAYS = 14
 STATUS_RECHECK_MS = 5 * 60 * 1000
 
 # state -> (label, dot color)
@@ -589,6 +613,39 @@ class SettingsDialog(tk.Toplevel):
         return self.result
 
 
+# ===== ABOUT =====
+class AboutDialog(tk.Toplevel):
+    def __init__(self, app):
+        super().__init__(app.root)
+        self.title("About")
+        self.configure(bg=COLORS["card"])
+        self.resizable(False, False)
+        self.transient(app.root)
+
+        body = ttk.Frame(self, style="Card.TFrame", padding=24)
+        body.pack(fill="both", expand=True)
+        logo = tk.Canvas(body, width=48, height=48, bg=COLORS["card"], highlightthickness=0)
+        logo.create_oval(2, 2, 46, 46, fill=COLORS["primary"], outline="")
+        logo.create_text(24, 24, text="ZK", fill="#FFFFFF", font=(app.font, 14, "bold"))
+        logo.grid(row=0, column=0, rowspan=3, sticky="n", padx=(0, 16))
+        ttk.Label(body, text="ZKTime Sync", style="CardTitle.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(body, text=f"Version {APP_VERSION}", style="Muted.TLabel").grid(row=1, column=1, sticky="w")
+        ttk.Label(body, text="M. Estiaque Ahmed Khan · Natore IT (natoreit.com)", style="Muted.TLabel").grid(
+            row=2, column=1, sticky="w", pady=(6, 0))
+
+        btns = ttk.Frame(body, style="Card.TFrame")
+        btns.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(20, 0))
+        ttk.Button(btns, text="Check for updates", command=lambda: app.check_updates(manual=True)).pack(side="left")
+        ttk.Button(btns, text="Open log folder", command=app.open_log_folder).pack(side="left", padx=8)
+        ttk.Button(btns, text="Close", command=self.destroy).pack(side="right")
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.update_idletasks()
+        x = app.root.winfo_rootx() + (app.root.winfo_width() - self.winfo_width()) // 2
+        y = app.root.winfo_rooty() + (app.root.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+
 # ===== MAIN APP =====
 class ZKApp:
     def __init__(self, root):
@@ -616,8 +673,13 @@ class ZKApp:
         self.device_status = {}   # (ip, port) -> {"state", "detail", "checked"}
         self.checks_running = 0
         self.waiting_sync = None
+        self.update_info = None
+        self.updating = False
+        self.log_dir = os.path.join(get_data_dir(), "logs")
+        self.prune_logs()
 
         self.build_header()
+        self.build_update_banner()
         self.build_status_bar()  # packed before the body so it always stays visible
 
         body = ttk.Frame(root, padding=(20, 16, 20, 8))
@@ -640,13 +702,17 @@ class ZKApp:
         self.root.after(600, self.check_devices)
         self.root.after(STATUS_RECHECK_MS, self.periodic_check)
 
-        # Start auto sync if configured
+        # Start auto sync if configured (first run soon after start, e.g. PC was off for days)
         current = self.config.get("auto_sync_interval", 0)
         if current > 0:
-            self.schedule_auto_sync(current)
+            self.schedule_auto_sync(current, first_delay_ms=FIRST_AUTO_SYNC_MS)
+
+        # Look for a newer version shortly after start and then every few hours
+        if updater.can_self_update():
+            self.root.after(8000, self.periodic_update_check)
 
         storage_type = "Windows Registry" if USE_REGISTRY else "File"
-        self.log(f"📁 Data storage: {storage_type}")
+        self.log(f"📁 ZKTime Sync {APP_VERSION} · Data storage: {storage_type}")
 
         self.root.update_idletasks()
         self.root.minsize(940, 680)
@@ -657,6 +723,7 @@ class ZKApp:
         c = COLORS
         header = tk.Frame(self.root, bg=c["header"], padx=20, pady=14)
         header.pack(fill="x")
+        self.header = header
 
         logo = tk.Canvas(header, width=36, height=36, bg=c["header"], highlightthickness=0)
         logo.create_oval(2, 2, 34, 34, fill=c["primary"], outline="")
@@ -813,10 +880,142 @@ class ZKApp:
         self.last_sync_var = tk.StringVar(value="Last sync: —")
         self.api_url_var = tk.StringVar(value=f"API: {self.get_api_url()}")
         ttk.Label(inner, textvariable=self.last_sync_var, style="Status.TLabel").pack(side="left")
-        ttk.Label(inner, text="Natore IT", style="Status.TLabel").pack(side="right")
+        ttk.Label(inner, text=f"v{APP_VERSION} · Natore IT", style="Status.TLabel").pack(side="right")
         api = ttk.Label(inner, textvariable=self.api_url_var, style="Link.TLabel", cursor="hand2")
         api.pack(side="right", padx=(0, 24))
         api.bind("<Button-1>", lambda e: self.open_settings())
+
+    def build_update_banner(self):
+        c = COLORS
+        self.banner = tk.Frame(self.root, bg=c["primary_light"], padx=20, pady=8)
+        self.banner_var = tk.StringVar()
+        tk.Label(self.banner, textvariable=self.banner_var, bg=c["primary_light"], fg=c["primary_dark"],
+                 font=(self.font, 10, "bold")).pack(side="left")
+        self.banner_btn = ttk.Button(self.banner, text="Update now", style="Chip.TButton",
+                                     command=self.install_update)
+        self.banner_btn.pack(side="right")
+
+    # ===== UPDATES =====
+    def periodic_update_check(self):
+        self.check_updates(manual=False)
+        self.root.after(UPDATE_CHECK_MS, self.periodic_update_check)
+
+    def check_updates(self, manual=False):
+        if self.updating:
+            return
+
+        def worker():
+            try:
+                info, error = updater.check_latest(), None
+            except Exception as e:
+                info, error = None, e
+            self.root.after(0, lambda: self._update_checked(info, error, manual))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_checked(self, info, error, manual):
+        if error:
+            if manual:
+                messagebox.showerror("Update", f"Could not check for updates:\n{error}", parent=self.root)
+            return
+        if not info:
+            if manual:
+                messagebox.showinfo("Update", f"You have the latest version ({APP_VERSION}).", parent=self.root)
+            return
+        self.update_info = info
+        self.log(f"⬆ New version {info['version']} is available")
+        self.banner_var.set(f"⬆  New version {info['version']} is available")
+        self.banner_btn.state(["!disabled"])
+        self.banner.pack(fill="x", after=self.header)
+        if manual:
+            self.install_update()
+
+    def install_update(self):
+        info = self.update_info
+        if not info or self.updating:
+            return
+        if self.sync_thread_running:
+            messagebox.showinfo("Update", "Please wait until the sync finishes.", parent=self.root)
+            return
+        if not updater.can_self_update():
+            messagebox.showinfo("Update", "Download the new installer from GitHub Releases\n"
+                                f"(version {info['version']}).", parent=self.root)
+            return
+        if not messagebox.askyesno("Update", f"Install ZKTime Sync {info['version']} now?\n\n"
+                                   "The app will close and restart after the update.\n"
+                                   "Your devices and settings are kept.", parent=self.root):
+            return
+
+        self.updating = True
+        self.banner_btn.state(["disabled"])
+        if self.auto_sync_job:
+            self.root.after_cancel(self.auto_sync_job)
+            self.auto_sync_job = None
+
+        def progress(done, total):
+            pct = f" {done * 100 // total}%" if total else ""
+            self.root.after(0, lambda: self.banner_var.set(f"⬇  Downloading update{pct}…"))
+
+        def worker():
+            try:
+                path = updater.download(info["url"], progress)
+                self.root.after(0, lambda: self._run_installer(path))
+            except Exception as e:
+                msg = str(e)
+                self.root.after(0, lambda: self._update_failed(msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_installer(self, path):
+        try:
+            updater.run_installer(path)
+        except Exception as e:
+            self._update_failed(str(e))
+            return
+        self.log("⬆ Installing update, the app will restart…")
+        self.banner_var.set("⬆  Installing update…")
+        self.root.after(1500, self.root.destroy)
+
+    def _update_failed(self, msg):
+        self.updating = False
+        interval = self.config.get("auto_sync_interval", 0)
+        if interval > 0 and not self.auto_sync_job:
+            self.schedule_auto_sync(interval)
+        self.banner_btn.state(["!disabled"])
+        self.banner_var.set(f"⬆  New version {self.update_info['version']} is available")
+        self.log(f"❌ Update failed: {msg}")
+        messagebox.showerror("Update failed", msg, parent=self.root)
+
+    # ===== LOG FILES =====
+    def write_log_file(self, text):
+        try:
+            os.makedirs(self.log_dir, exist_ok=True)
+            path = os.path.join(self.log_dir, f"{datetime.now():%Y-%m-%d}.log")
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(text + "\n")
+        except Exception:
+            pass
+
+    def prune_logs(self):
+        try:
+            cutoff = datetime.now() - timedelta(days=LOG_KEEP_DAYS)
+            for name in os.listdir(self.log_dir):
+                path = os.path.join(self.log_dir, name)
+                if name.endswith(".log") and datetime.fromtimestamp(os.path.getmtime(path)) < cutoff:
+                    os.remove(path)
+        except Exception:
+            pass
+
+    def open_log_folder(self):
+        os.makedirs(self.log_dir, exist_ok=True)
+        try:
+            if os.name == "nt":
+                os.startfile(self.log_dir)
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", self.log_dir])
+        except Exception as e:
+            messagebox.showinfo("Log folder", self.log_dir, parent=self.root)
 
     # ===== HELPER =====
     def log(self, text):
@@ -837,6 +1036,7 @@ class ZKApp:
             tag = "muted"
         else:
             tag = ""
+        self.write_log_file(text if text.startswith("-->") else f"--> [{datetime.now():%H:%M:%S}] {text}")
         self.log_box.configure(state="normal")
         self.log_box.insert(tk.END, text + "\n", tag)
         self.log_box.see(tk.END)
@@ -1246,7 +1446,7 @@ class ZKApp:
         else:
             self.log("⏰ Auto sync turned off")
 
-    def schedule_auto_sync(self, interval):
+    def schedule_auto_sync(self, interval, first_delay_ms=None):
         def job():
             # reschedule first so an error in this run never stops auto sync
             self.auto_sync_job = self.root.after(interval * 1000, job)
@@ -1257,13 +1457,11 @@ class ZKApp:
             # Auto sync sends every log newer than the last synced one (catches up missed days)
             today = datetime.now().strftime("%Y-%m-%d")
             self.start_sync(today, today, incremental=True)
-        self.auto_sync_job = self.root.after(interval * 1000, job)
+        self.auto_sync_job = self.root.after(first_delay_ms or interval * 1000, job)
 
     # ===== DEV INFO =====
     def show_dev_info(self):
-        messagebox.showinfo("About ZKTime Sync",
-                            "ZKTime Sync\n\nDeveloped by M. Estiaque Ahmed Khan\nNatore IT (natoreit.com)",
-                            parent=self.root)
+        AboutDialog(self)
 
 # ===== MAIN =====
 if __name__ == "__main__":

@@ -5,7 +5,9 @@ from types import MethodType
 import requests
 from datetime import datetime, date, timedelta
 import time
-from sync_dup import SyncDUP
+import json
+import os
+from sync_dup import SyncDUP, get_data_dir
 
 # ZKTeco Verify Type Mapping (pyzk puts the verify mode in Attendance.status)
 verifyTypes = {
@@ -81,11 +83,54 @@ def friendly_error(e):
 
 FETCH_TIMEOUT = 20      # seconds per network read while downloading logs
 CHECK_TIMEOUT = 5
-TCP_CHUNK = 16 * 1024   # pyzk asks for ~64 KB per TCP chunk; many firmwares stall on that
-UDP_RETRY_WAIT = 10     # let the device settle after a failed TCP session
+RETRY_WAIT = 10         # let the device settle after a failed session
 
-# Devices that only worked over UDP last time (try UDP first next time)
-_prefer_udp = set()
+# Ways to download logs, tried in order until one works. pyzk's default is
+# ~64 KB TCP chunks, which many firmwares stall on; smaller chunks use the same protocol.
+STRATEGIES = [
+    ("TCP", 16 * 1024),
+    ("TCP", 4 * 1024),
+    ("TCP", 1024),
+    ("UDP", None),
+]
+PREFS_FILE = "device_prefs.json"
+
+
+def _strategy_name(strategy):
+    proto, chunk = strategy
+    return proto if chunk is None else f"{proto} {chunk // 1024} KB"
+
+
+def _load_prefs():
+    try:
+        with open(os.path.join(get_data_dir(), PREFS_FILE), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_pref(ip, index):
+    prefs = _load_prefs()
+    if prefs.get(ip) == index:
+        return
+    prefs[ip] = index
+    try:
+        path = os.path.join(get_data_dir(), PREFS_FILE)
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(prefs, f, indent=4)
+        os.replace(path + ".tmp", path)
+    except Exception:
+        pass
+
+
+def _strategy_order(ip):
+    """Remembered working strategy first, then the rest in default order"""
+    pref = _load_prefs().get(ip)
+    order = list(range(len(STRATEGIES)))
+    if isinstance(pref, int) and 0 <= pref < len(STRATEGIES):
+        order.remove(pref)
+        order.insert(0, pref)
+    return order
 
 
 def _force_close(conn):
@@ -97,7 +142,9 @@ def _force_close(conn):
 
 
 def _protocols(ip):
-    return [True, False] if ip in _prefer_udp else [False, True]   # force_udp flags
+    """force_udp flags to try for a quick check, remembered protocol first"""
+    first = STRATEGIES[_strategy_order(ip)[0]][0]
+    return [True, False] if first == "UDP" else [False, True]
 
 
 def check_device(ip, port=4370, password=0, timeout=CHECK_TIMEOUT):
@@ -207,11 +254,11 @@ def _release_device(conn, locked, ip, port, pwd, udp, log):
             _force_close(rconn)
 
 
-def _fetch_once(ip, port, pwd, udp, log):
-    proto = "UDP" if udp else "TCP"
+def _fetch_once(ip, port, pwd, strategy, log):
+    udp = strategy[0] == "UDP"
     conn, locked, step = None, False, "connect"
     try:
-        log(f"[CONNECT] {ip}:{port} ({proto})")
+        log(f"[CONNECT] {ip}:{port} ({_strategy_name(strategy)})")
         zk = ZK(ip, port=port, timeout=FETCH_TIMEOUT, password=pwd, force_udp=udp, ommit_ping=True)
         conn = zk.connect()
 
@@ -236,7 +283,8 @@ def _fetch_once(ip, port, pwd, udp, log):
                 last_pct[0] = pct
                 log(f"[FETCH] downloading {done // 1024}/{total // 1024} KB ({pct}%)")
 
-        _use_small_chunks(conn, TCP_CHUNK, progress)
+        if not udp:
+            _use_small_chunks(conn, strategy[1], progress)
 
         step = "download logs"
         started = time.time()
@@ -252,24 +300,30 @@ def _fetch_once(ip, port, pwd, udp, log):
 
 
 def _fetch_device_logs(ip, port, pwd, log):
-    """Read SN + attendance. Retries over UDP if TCP stalls (common with large logs)."""
-    error = None
-    for attempt, udp in enumerate(_protocols(ip)):
-        if attempt:
-            log(f"[RETRY] Trying {ip} again over {'UDP' if udp else 'TCP'} in {UDP_RETRY_WAIT}s…")
-            time.sleep(UDP_RETRY_WAIT)
+    """
+    Read SN + attendance. Tries smaller TCP chunks and then UDP until one works,
+    and remembers the working way for this device.
+    """
+    error, tried, tcp_reachable = None, 0, True
+    for index in _strategy_order(ip):
+        strategy = STRATEGIES[index]
+        if strategy[0] == "TCP" and not tcp_reachable:
+            continue   # TCP did not even connect - smaller chunks will not help
+        if tried:
+            log(f"[RETRY] Trying {ip} again with {_strategy_name(strategy)} in {RETRY_WAIT}s…")
+            time.sleep(RETRY_WAIT)
+        tried += 1
         try:
-            result = _fetch_once(ip, port, pwd, udp, log)
-            if udp:
-                _prefer_udp.add(ip)
-            else:
-                _prefer_udp.discard(ip)
+            result = _fetch_once(ip, port, pwd, strategy, log)
+            _save_pref(ip, index)
             return result
         except FetchError as e:
             error = e
             log(f"[ERROR] {ip}: failed at '{e.step}' - {friendly_error(e.error)}")
             if "unauth" in str(e.error).lower():
-                break
+                break   # wrong comm key - nothing else will help
+            if strategy[0] == "TCP" and e.step == "connect":
+                tcp_reachable = False
     raise error
 
 

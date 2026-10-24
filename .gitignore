@@ -6,3 +6,6 @@ Output/
 .zkdata
 last_sync.json
 last_sync.json.tmp
+device_prefs.json
+device_prefs.json.tmp
+logs/

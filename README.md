@@ -28,6 +28,21 @@ python app.py
 pyinstaller --onefile --icon=app_icon.ico app.py
 ```
 
+## Releases & Updates
+
+- Push a tag like `v5.3.0` → GitHub Actions builds `ZKTimeSyncInstaller.exe` and publishes a Release.
+  The tag becomes the app version (shown in About and the status bar).
+- Installed apps check the latest Release on start and every 6 hours. When a newer version
+  exists a banner appears; **Update now** downloads and installs it (one UAC prompt) and the
+  app restarts. Devices and settings are kept.
+- The installer can add ZKTime Sync to Windows startup (checked by default).
+
+## Diagnostics
+
+- Logs are saved per day in `%APPDATA%\ZKTimeSync\logs` (kept 14 days). About → **Open log folder**.
+- Log download strategy per device is remembered in `%APPDATA%\ZKTimeSync\device_prefs.json`
+  (TCP 16 KB → 4 KB → 1 KB chunks → UDP, first one that works).
+
 ## Usage
 
 ### GUI Features
