@@ -1,4 +1,7 @@
-from zk import ZK
+from zk import ZK, const
+from zk.exception import ZKErrorResponse
+from struct import pack, unpack
+from types import MethodType
 import requests
 from datetime import datetime, date, timedelta
 import time
@@ -78,6 +81,8 @@ def friendly_error(e):
 
 FETCH_TIMEOUT = 20      # seconds per network read while downloading logs
 CHECK_TIMEOUT = 5
+TCP_CHUNK = 16 * 1024   # pyzk asks for ~64 KB per TCP chunk; many firmwares stall on that
+UDP_RETRY_WAIT = 10     # let the device settle after a failed TCP session
 
 # Devices that only worked over UDP last time (try UDP first next time)
 _prefer_udp = set()
@@ -125,6 +130,42 @@ def check_device(ip, port=4370, password=0, timeout=CHECK_TIMEOUT):
                     pass
                 _force_close(conn)
     return {"ok": False, "sn": None, "time": None, "error": friendly_error(error), "udp": None}
+
+
+def _use_small_chunks(conn, chunk, progress=None):
+    """
+    Replace pyzk's read_with_buffer on this connection with one that reads in
+    smaller chunks over TCP and reports progress. Same protocol, smaller pieces.
+    """
+    if not getattr(conn, "tcp", False) or not hasattr(conn, "_ZK__read_chunk"):
+        return
+
+    def read_with_buffer(self, command, fct=0, ext=0):
+        command_string = pack('<bhii', 1, command, fct, ext)
+        cmd_response = self._ZK__send_command(1503, command_string, 1024)
+        if not cmd_response.get('status'):
+            raise ZKErrorResponse("RWB Not supported")
+        if cmd_response['code'] == const.CMD_DATA:
+            # small payload came back in one piece
+            data = self._ZK__data
+            need = (self._ZK__tcp_length - 8) - len(data)
+            if need > 0:
+                more = self._ZK__recieve_raw_data(need)
+                return b''.join([data, more]), len(data) + len(more)
+            return data, len(data)
+
+        size = unpack('I', self._ZK__data[1:5])[0]
+        parts, start = [], 0
+        while start < size:
+            n = min(chunk, size - start)
+            parts.append(self._ZK__read_chunk(start, n))
+            start += n
+            if progress:
+                progress(command, start, size)
+        self.free_data()
+        return b''.join(parts), start
+
+    conn.read_with_buffer = MethodType(read_with_buffer, conn)
 
 
 class FetchError(Exception):
@@ -185,6 +226,18 @@ def _fetch_once(ip, port, pwd, udp, log):
         conn.disable_device()
         locked = True
 
+        last_pct = [-1]
+
+        def progress(command, done, total):
+            if command != const.CMD_ATTLOG_RRQ:
+                return
+            pct = done * 100 // total
+            if pct // 25 != last_pct[0] // 25 or done == total:   # log every ~25%
+                last_pct[0] = pct
+                log(f"[FETCH] downloading {done // 1024}/{total // 1024} KB ({pct}%)")
+
+        _use_small_chunks(conn, TCP_CHUNK, progress)
+
         step = "download logs"
         started = time.time()
         logs = conn.get_attendance() or []
@@ -203,8 +256,8 @@ def _fetch_device_logs(ip, port, pwd, log):
     error = None
     for attempt, udp in enumerate(_protocols(ip)):
         if attempt:
-            log(f"[RETRY] Trying {ip} again over {'UDP' if udp else 'TCP'} in 3s…")
-            time.sleep(3)
+            log(f"[RETRY] Trying {ip} again over {'UDP' if udp else 'TCP'} in {UDP_RETRY_WAIT}s…")
+            time.sleep(UDP_RETRY_WAIT)
         try:
             result = _fetch_once(ip, port, pwd, udp, log)
             if udp:
