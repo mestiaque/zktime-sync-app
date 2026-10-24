@@ -76,54 +76,148 @@ def friendly_error(e):
     return text or e.__class__.__name__
 
 
-def check_device(ip, port=4370, password=0, timeout=5):
+FETCH_TIMEOUT = 20      # seconds per network read while downloading logs
+CHECK_TIMEOUT = 5
+
+# Devices that only worked over UDP last time (try UDP first next time)
+_prefer_udp = set()
+
+
+def _force_close(conn):
+    """Drop the socket so the device frees its session even if CMD_EXIT failed"""
+    try:
+        conn._ZK__sock.close()
+    except Exception:
+        pass
+
+
+def _protocols(ip):
+    return [True, False] if ip in _prefer_udp else [False, True]   # force_udp flags
+
+
+def check_device(ip, port=4370, password=0, timeout=CHECK_TIMEOUT):
     """
     Quick connection test: connect, read SN + device clock, disconnect.
-    Does not disable the device or touch attendance logs.
+    Does not disable the device or touch attendance logs. Tries TCP, then UDP.
     """
-    conn = None
-    try:
-        # ommit_ping: pyzk's ping runs a console command (flashes a window in the .exe)
-        zk = ZK(ip, port=port, timeout=timeout, password=password, ommit_ping=True)
-        conn = zk.connect()
-        sn = conn.get_serialnumber()
+    error = None
+    for udp in _protocols(ip):
+        conn = None
         try:
-            device_time = conn.get_time()
-        except Exception:
-            device_time = None
-        return {"ok": True, "sn": sn, "time": device_time, "error": ""}
-    except Exception as e:
-        return {"ok": False, "sn": None, "time": None, "error": friendly_error(e)}
-    finally:
-        if conn:
+            # ommit_ping: pyzk's ping runs a console command (flashes a window in the .exe)
+            zk = ZK(ip, port=port, timeout=timeout, password=password, force_udp=udp, ommit_ping=True)
+            conn = zk.connect()
+            sn = conn.get_serialnumber()
             try:
-                conn.disconnect()
+                device_time = conn.get_time()
+            except Exception:
+                device_time = None
+            return {"ok": True, "sn": sn, "time": device_time, "error": "", "udp": udp}
+        except Exception as e:
+            error = e
+            if "unauth" in str(e).lower():
+                break   # wrong comm key - the other protocol will not help
+        finally:
+            if conn:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+                _force_close(conn)
+    return {"ok": False, "sn": None, "time": None, "error": friendly_error(error), "udp": None}
+
+
+class FetchError(Exception):
+    def __init__(self, step, error):
+        super().__init__(f"{step}: {error}")
+        self.step, self.error = step, error
+
+
+def _release_device(conn, locked, ip, port, pwd, udp, log):
+    """Unlock + disconnect. If that fails, reconnect once just to unlock the device."""
+    try:
+        if locked:
+            conn.enable_device()
+        conn.disconnect()
+        log(f"[DISCONNECT] {ip}")
+        return
+    except Exception as e:
+        log(f"[DISCONNECT] {ip}: {e}")
+    finally:
+        _force_close(conn)
+
+    if not locked:
+        return
+    time.sleep(2)
+    rconn = None
+    try:
+        rconn = ZK(ip, port=port, timeout=10, password=pwd, force_udp=udp, ommit_ping=True).connect()
+        rconn.enable_device()
+        log(f"[RECOVER] Device {ip} unlocked again")
+    except Exception as e:
+        log(f"[ERROR] Could not unlock {ip} ({friendly_error(e)}). "
+            f"If the device screen is stuck on 'Working', restart the device.")
+    finally:
+        if rconn:
+            try:
+                rconn.disconnect()
             except Exception:
                 pass
+            _force_close(rconn)
 
 
-def _fetch_device_logs(ip, port, pwd, log):
-    """Connect, read SN + attendance, and release the device immediately."""
-    conn = None
+def _fetch_once(ip, port, pwd, udp, log):
+    proto = "UDP" if udp else "TCP"
+    conn, locked, step = None, False, "connect"
     try:
-        log(f"[CONNECT] {ip}:{port}")
-        zk = ZK(ip, port=port, timeout=10, password=pwd)
+        log(f"[CONNECT] {ip}:{port} ({proto})")
+        zk = ZK(ip, port=port, timeout=FETCH_TIMEOUT, password=pwd, force_udp=udp, ommit_ping=True)
         conn = zk.connect()
-        conn.disable_device()
+
+        step = "read serial number"
         sn = conn.get_serialnumber()
-        log(f"[DEVICE] SN={sn}")
+
+        step = "read record count"
+        conn.read_sizes()
+        log(f"[DEVICE] SN={sn} · {conn.users} user(s), {conn.records} log(s) on device")
+
+        step = "lock device"
+        conn.disable_device()
+        locked = True
+
+        step = "download logs"
+        started = time.time()
         logs = conn.get_attendance() or []
-        log(f"[FETCH] {len(logs)} log(s) fetched from {ip}")
+        log(f"[FETCH] {len(logs)} log(s) fetched from {ip} in {time.time() - started:.0f}s")
         return sn, logs
+    except Exception as e:
+        raise FetchError(step, e) from e
     finally:
         # Device is locked only while reading, not while pushing to the API
         if conn:
-            try:
-                conn.enable_device()
-                conn.disconnect()
-                log(f"[DISCONNECT] {ip}")
-            except Exception as e:
-                log(f"[DISCONNECT] Failed to enable/disconnect {ip}: {e}")
+            _release_device(conn, locked, ip, port, pwd, udp, log)
+
+
+def _fetch_device_logs(ip, port, pwd, log):
+    """Read SN + attendance. Retries over UDP if TCP stalls (common with large logs)."""
+    error = None
+    for attempt, udp in enumerate(_protocols(ip)):
+        if attempt:
+            log(f"[RETRY] Trying {ip} again over {'UDP' if udp else 'TCP'} in 3s…")
+            time.sleep(3)
+        try:
+            result = _fetch_once(ip, port, pwd, udp, log)
+            if udp:
+                _prefer_udp.add(ip)
+            else:
+                _prefer_udp.discard(ip)
+            return result
+        except FetchError as e:
+            error = e
+            log(f"[ERROR] {ip}: failed at '{e.step}' - {friendly_error(e.error)}")
+            if "unauth" in str(e.error).lower():
+                break
+    raise error
 
 
 def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None, incremental=False):
@@ -153,7 +247,7 @@ def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None
 
     serials = {}
     session = requests.Session()
-    total_sent = total_failed = 0
+    total_sent = total_failed = unreachable = 0
 
     for dev in devices:
         ip = dev.get("ip")
@@ -163,7 +257,9 @@ def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None
         try:
             sn, logs = _fetch_device_logs(ip, port, pwd, log)
         except Exception as e:
-            log(f"[ERROR] Connection/Fetch failed for {ip}: {friendly_error(e)} ({e})")
+            reason = friendly_error(e.error if isinstance(e, FetchError) else e)
+            log(f"[ERROR] Connection/Fetch failed for {ip}: {reason}")
+            unreachable += 1
             continue
 
         serials[ip] = sn
@@ -228,5 +324,8 @@ def fetch_logs_and_sync(api_url, devices, log_fn, start_date=None, end_date=None
         total_failed += failed
 
     session.close()
-    log(f"[SYNC] Complete! Sent {total_sent}, failed {total_failed}")
+    summary = f"Sent {total_sent}, failed {total_failed}"
+    if unreachable:
+        summary += f", {unreachable} device(s) unreachable"
+    log(f"[SYNC] Complete! {summary}")
     return serials

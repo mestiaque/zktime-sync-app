@@ -825,12 +825,13 @@ class ZKApp:
     def _append_log(self, text):
         lower = text.lower()
         if "complete" in lower:
-            tag = "warn" if "failed 0" not in lower and "failed" in lower else "success"
+            ok = "failed 0" in lower and "unreachable" not in lower
+            tag = "success" if ok else "warn"
         elif any(k in lower for k in ("error", "[failed]", "failed for", "❌", "gave up")):
             tag = "error"
         elif any(k in lower for k in ("✅", "synced", "[save]")):
             tag = "success"
-        elif any(k in lower for k in ("retry", "⚠", "skipped", "rate limit")):
+        elif any(k in lower for k in ("retry", "⚠", "skipped", "rate limit", "[recover]")):
             tag = "warn"
         elif text.startswith("📁") or "[connect]" in lower or "[disconnect]" in lower:
             tag = "muted"
